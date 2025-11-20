@@ -4,6 +4,6 @@ shapely
 numpy
 scipy
 ezdxf
-svgpath
+svg.path
 mapbox-earcut
 rtree
