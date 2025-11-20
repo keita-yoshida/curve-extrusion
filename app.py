@@ -3,38 +3,70 @@ import trimesh
 import numpy as np
 import plotly.graph_objects as go
 from shapely.geometry import Polygon
+import tempfile
+import os
 
-def process_vector_to_mesh(file_obj, file_type, thickness):
+def process_vector_to_mesh(file_obj, file_ext, thickness):
     """
-    ベクターファイルを読み込み、閉じた形状（Polygon）を探して押し出す関数
+    一時ファイルを作成して読み込み、閉じた形状を押し出す関数
     """
+    # 一時ファイルとして保存（Trimeshの読み込み安定性向上のため）
+    # delete=Falseにして、読み込み後に手動で消す
+    with tempfile.NamedTemporaryFile(delete=False, suffix=f".{file_ext}") as tmp:
+        tmp.write(file_obj.read())
+        tmp_path = tmp.name
+
     try:
-        scene = trimesh.load(file_obj, file_type=file_type)
+        # ファイルパスを指定してロード（これで形式判定が確実になります）
+        scene = trimesh.load(tmp_path)
+        
         meshes = []
         
+        # ロード結果の正規化
         if isinstance(scene, trimesh.Scene):
-            geometries = list(scene.geometry.values())
-        else:
+            # Sceneの場合はgeometryを取り出す
+            if hasattr(scene, 'geometry'):
+                geometries = list(scene.geometry.values())
+            else:
+                geometries = []
+        elif isinstance(scene, trimesh.path.Path2D):
             geometries = [scene]
+        else:
+            # 想定外の型（リストなど）が返ってきた場合の保険
+            geometries = [] 
 
         found_closed_shape = False
 
         for geom in geometries:
+            # Path2Dオブジェクトのみ処理
             if isinstance(geom, trimesh.path.Path2D):
+                # 閉じた領域（Polygon）を抽出
                 polygons = geom.polygons_full
-                if not polygons: continue
+                
+                if not polygons:
+                    continue
                 
                 found_closed_shape = True
+                
                 for poly in polygons:
                     try:
+                        # 押し出し処理
                         mesh = trimesh.creation.extrude_polygon(poly, height=thickness)
                         meshes.append(mesh)
                     except Exception as e:
+                        print(f"Skip polygon: {e}")
                         continue
+
+        # 後始末：一時ファイルを削除
+        try:
+            os.remove(tmp_path)
+        except:
+            pass
 
         if not meshes:
             return None, found_closed_shape
 
+        # 結合処理
         if len(meshes) > 1:
             final_mesh = trimesh.util.concatenate(meshes)
         else:
@@ -44,18 +76,19 @@ def process_vector_to_mesh(file_obj, file_type, thickness):
         return final_mesh, found_closed_shape
 
     except Exception as e:
-        st.error(f"処理エラー: {e}")
+        # エラー時もファイルは消す
+        try:
+            os.remove(tmp_path)
+        except:
+            pass
+        st.error(f"処理詳細エラー: {e}")
         return None, False
 
 def visualize_mesh(mesh):
-    """
-    TrimeshオブジェクトをPlotlyで3D表示する関数
-    """
-    # 頂点と面データの取得
+    """Plotlyによる3D表示"""
     vertices = mesh.vertices
     faces = mesh.faces
 
-    # PlotlyのMesh3dオブジェクト作成
     fig = go.Figure(data=[
         go.Mesh3d(
             x=vertices[:, 0],
@@ -69,23 +102,17 @@ def visualize_mesh(mesh):
             flatshading=True
         )
     ])
-
-    # レイアウト調整（アスペクト比を維持）
     fig.update_layout(
         scene=dict(
-            xaxis=dict(visible=False),
-            yaxis=dict(visible=False),
-            zaxis=dict(visible=False),
+            xaxis=dict(visible=False), yaxis=dict(visible=False), zaxis=dict(visible=False),
             aspectmode='data'
         ),
         margin=dict(l=0, r=0, b=0, t=0)
     )
-    
     return fig
 
-# --- Streamlit UI ---
-
-st.set_page_config(page_title="DXF/SVG to STL Converter", layout="centered")
+# --- UI ---
+st.set_page_config(page_title="Vector to STL Converter", layout="centered")
 st.title("Vector to STL Converter")
 st.markdown("DXF/SVGファイルをアップロードして、3Dプレビュー・STLダウンロードができます。")
 
@@ -95,21 +122,19 @@ thickness = st.sidebar.number_input("押し出し厚み (mm)", min_value=0.1, va
 uploaded_file = st.file_uploader("ベクターファイル (DXF / SVG)", type=["dxf", "svg"])
 
 if uploaded_file:
+    # 拡張子を取得（小文字に統一）
     file_ext = uploaded_file.name.split('.')[-1].lower()
-    uploaded_file.seek(0)
     
+    # 処理開始（ファイルポインタのリセットは不要、保存時に読むため）
     mesh, found_shape = process_vector_to_mesh(uploaded_file, file_ext, thickness)
 
     if mesh and not mesh.is_empty:
         st.success("変換成功！")
         
-        # --- 3Dプレビュー表示 (Plotly) ---
         st.subheader("3D Preview")
-        st.caption("マウスで回転・拡大縮小ができます")
         fig = visualize_mesh(mesh)
         st.plotly_chart(fig, use_container_width=True)
 
-        # --- ダウンロード ---
         col1, col2 = st.columns(2)
         col1.metric("頂点数", len(mesh.vertices))
         col2.metric("面数", len(mesh.faces))
@@ -125,8 +150,6 @@ if uploaded_file:
         
     elif not found_shape:
         st.warning("⚠️ 閉じた領域が見つかりませんでした。")
-        st.info("線が繋がっているか、自己交差していないかCADデータを確認してください。")
+        st.info("SVGの場合、パスが「塗りつぶし（Fill）」可能な閉じた形状になっているか確認してください。")
     else:
-        st.error("メッシュ生成に失敗しました。")
-
-st.caption("Powered by Streamlit & Trimesh")
+        st.error("メッシュ生成に失敗しました。データを確認してください。")
