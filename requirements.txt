@@ -9,3 +9,5 @@ mapbox-earcut
 rtree
 networkx
 plotly
+lxml
+Pillow
