@@ -2,133 +2,121 @@ import streamlit as st
 import trimesh
 import numpy as np
 import tempfile
-import os
-from io import BytesIO
+from shapely.geometry import Polygon
 
 def process_vector_to_mesh(file_obj, file_type, thickness):
     """
-    ベクターファイルを読み込み、閉じた形状を押し出してメッシュ化する関数
+    ベクターファイルを読み込み、閉じた形状（Polygon）を探して押し出す関数
+    バラバラの線分から閉じた領域を検出するロジックを強化しています。
     """
     try:
-        # Trimeshを使用してファイルをロード
-        # file_objはBytesIOなので、load関数にfile_typeを明示する
-        scene_or_path = trimesh.load(file_obj, file_type=file_type)
+        # ファイルをロード
+        scene = trimesh.load(file_obj, file_type=file_type)
         
         meshes = []
-
-        # ロード結果がSceneかPathかで処理を分岐
-        if isinstance(scene_or_path, trimesh.Scene):
-            # Sceneの場合、ジオメトリを取り出す
-            geometries = scene_or_path.geometry.values()
-        elif isinstance(scene_or_path, trimesh.path.Path2D):
-            # Path2Dの場合、リストに入れる
-            geometries = [scene_or_path]
+        
+        # Sceneならジオメトリ辞書の値を取得、Path2Dならリスト化
+        if isinstance(scene, trimesh.Scene):
+            geometries = list(scene.geometry.values())
         else:
-            st.error("不明なデータ形式です。")
-            return None
+            geometries = [scene]
 
-        # 各ジオメトリ（パス）に対して処理
+        found_closed_shape = False
+
         for geom in geometries:
             if isinstance(geom, trimesh.path.Path2D):
-                # 押し出し処理 (extrude)
-                # cap=Trueで蓋をしてソリッドにする
-                try:
-                    mesh = geom.extrude(amount=thickness, cap=True)
-                    
-                    # 複数の閉じた領域がある場合、リストで返ることがあるため結合
-                    if isinstance(mesh, list):
-                        combined = trimesh.util.concatenate(mesh)
-                        meshes.append(combined)
-                    else:
-                        meshes.append(mesh)
-                except Exception as e:
-                    # 開いた曲線など、押し出しできないパスはスキップされる場合があります
-                    st.warning(f"一部のパスの押し出しに失敗しました（開いた曲線の可能性があります）: {e}")
+                # ---------------------------------------------------------
+                # 修正ポイント: Path2D.extrude() を直接使わず、
+                # Shapelyのポリゴン抽出機能を使って閉じた領域だけを取り出す
+                # ---------------------------------------------------------
+                
+                # polygons_full は、パス内の「閉じた領域」をShapelyのPolygonとして返します
+                # これにより、バラバラの線でも閉じていれば検出されます
+                polygons = geom.polygons_full
+                
+                if not polygons:
+                    # 閉じた領域が見つからない場合
                     continue
+                
+                found_closed_shape = True
+                
+                for poly in polygons:
+                    # ShapelyのPolygonをTrimeshの押し出し機能で立体化
+                    try:
+                        # 押し出し処理
+                        mesh = trimesh.creation.extrude_polygon(poly, height=thickness)
+                        meshes.append(mesh)
+                    except Exception as e:
+                        print(f"ポリゴンの押し出しに失敗: {e}")
+                        continue
 
         if not meshes:
-            return None
+            return None, found_closed_shape
 
-        # 全てのメッシュを1つのオブジェクトに結合
-        final_mesh = trimesh.util.concatenate(meshes)
+        # 全てのメッシュを結合
+        if len(meshes) > 1:
+            final_mesh = trimesh.util.concatenate(meshes)
+        else:
+            final_mesh = meshes[0]
         
-        # 整合性の修正（法線の統一など）
         final_mesh.fix_normals()
-        
-        return final_mesh
+        return final_mesh, found_closed_shape
 
     except Exception as e:
-        st.error(f"ファイルの処理中にエラーが発生しました: {e}")
-        return None
+        st.error(f"処理エラー: {e}")
+        return None, False
 
 # --- Streamlit UI ---
 
 st.set_page_config(page_title="Vector to STL Converter", layout="centered")
-
-st.title("Vector to STL Converter")
+st.title("Vector to STL Converter (強化版)")
 st.markdown("""
-DXFまたはSVGファイルをアップロードし、厚みを指定してSTL形式でダウンロードできます。
-※ **閉じた曲線（Closed Loops）** のみが立体化されます。
+DXF/SVGをアップロードしてSTLに変換します。
+**バラバラの線分でも、囲まれた領域があれば立体化を試みます。**
 """)
 
-# 1. サイドバー設定
 st.sidebar.header("設定")
-thickness = st.sidebar.number_input(
-    "押し出し厚み (mm)", 
-    min_value=0.1, 
-    value=5.0, 
-    step=0.1,
-    format="%.1f"
-)
+thickness = st.sidebar.number_input("押し出し厚み (mm)", min_value=0.1, value=5.0, step=0.1, format="%.1f")
 
-# 2. ファイルアップロード
-uploaded_file = st.file_uploader("ベクターファイルを選択 (DXF / SVG)", type=["dxf", "svg"])
+uploaded_file = st.file_uploader("ベクターファイル (DXF / SVG)", type=["dxf", "svg"])
 
-if uploaded_file is not None:
-    # 拡張子の判定
+if uploaded_file:
     file_ext = uploaded_file.name.split('.')[-1].lower()
-    
-    st.info(f"ファイル '{uploaded_file.name}' を読み込んでいます...")
-
-    # ファイルポインタをリセット（念のため）
     uploaded_file.seek(0)
     
     # 処理実行
-    mesh = process_vector_to_mesh(uploaded_file, file_ext, thickness)
+    mesh, found_shape = process_vector_to_mesh(uploaded_file, file_ext, thickness)
 
     if mesh and not mesh.is_empty:
-        st.success("変換に成功しました！")
-
-        # メッシュ情報の表示
+        st.success("変換成功！")
+        
         col1, col2 = st.columns(2)
-        with col1:
-            st.metric("頂点数 (Vertices)", len(mesh.vertices))
-        with col2:
-            st.metric("面数 (Faces)", len(mesh.faces))
+        col1.metric("頂点数", len(mesh.vertices))
+        col2.metric("面数", len(mesh.faces))
 
-        # プレビュー表示（簡易的）
-        # Streamlit標準の3D表示機能を使用（重い場合は省略可）
-        with st.expander("3Dプレビューを表示"):
-             # 一時ファイルに書き出して表示させる（Streamlitの仕様上の制限回避）
+        # プレビュー
+        with st.expander("3Dプレビュー"):
             with tempfile.NamedTemporaryFile(suffix=".stl", delete=False) as tmp:
                 mesh.export(tmp.name)
-                st.write("※簡易ビューアのため、色は反映されません")
-                # pydeck等を使わず簡易的に外部ライブラリなしで表示する方法はないため
-                # ここでは概念的に留めますが、実際のアプリでは st.pydeck_chart 等を使います。
-                # 今回はダウンロードを優先します。
+                st.write("※簡易ビューア")
 
-        # 3. STLダウンロード
-        # メッシュをSTLバイナリとして書き出し
+        # ダウンロードボタン
         stl_data = trimesh.exchange.stl.export_stl(mesh)
-        
         st.download_button(
-            label="STLファイルをダウンロード",
+            label="STLをダウンロード",
             data=stl_data,
             file_name=f"{uploaded_file.name.split('.')[0]}_extruded.stl",
             mime="model/stl"
         )
+    elif not found_shape:
+        st.warning("⚠️ 閉じた領域が見つかりませんでした。")
+        st.info("""
+        **考えられる原因と対策:**
+        1. **線が繋がっていない:** CADで拡大して、角が離れていないか確認してください。
+        2. **ポリライン化:** CADソフトで `JOIN` (結合) コマンドや `PEDIT` を使い、線を1つの連続したポリラインに変換してください。
+        3. **自己交差:** 線が8の字に交差しているとエラーになる場合があります。
+        """)
     else:
-        st.error("有効な閉じた形状が見つかりませんでした。データを確認してください。")
+        st.error("形状の検出はできましたが、メッシュ生成に失敗しました。")
 
-st.markdown("---")
-st.caption("Powered by Python, Streamlit, and Trimesh")
+st.caption("Powered by Python, Streamlit, Trimesh & Shapely")
