@@ -5,4 +5,5 @@ numpy
 scipy
 ezdxf
 svgpath
-mapbox_earcut  # 多角形の三角形分割に推奨
+mapbox-earcut
+rtree
