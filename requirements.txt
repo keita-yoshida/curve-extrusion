@@ -8,3 +8,4 @@ svg.path
 mapbox-earcut
 rtree
 networkx
+plotly
