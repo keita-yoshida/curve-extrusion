@@ -69,10 +69,10 @@ def process_vector_to_mesh(file_obj, file_type, thickness):
 # --- Streamlit UI ---
 
 st.set_page_config(page_title="Vector to STL Converter", layout="centered")
-st.title("Vector to STL Converter (強化版)")
+st.title("Vector to STL Converter")
 st.markdown("""
 DXF/SVGをアップロードしてSTLに変換します。
-**バラバラの線分でも、囲まれた領域があれば立体化を試みます。**
+**閉じた曲線のみを押し出します。**
 """)
 
 st.sidebar.header("設定")
@@ -120,3 +120,4 @@ if uploaded_file:
         st.error("形状の検出はできましたが、メッシュ生成に失敗しました。")
 
 st.caption("Powered by Python, Streamlit, Trimesh & Shapely")
+
