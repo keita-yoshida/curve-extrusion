@@ -34,12 +34,19 @@ app.py                     旧 Streamlit 版（参考用に残しています）
 
 ## ローカルで動かす
 
-ES modules を使うので `file://` では開けません。任意の静的サーバーを立ててください。
+> **`index.html` をダブルクリックして開かないでください。**
+> ES modules はブラウザの制限で `file://` から読み込めず、画面は出るのにボタンが一切反応しない状態になります
+> （その場合は画面下部にその旨のメッセージが出ます）。
+
+任意の静的サーバーを立てて開いてください。
 
 ```sh
+cd curve-extrusion
 python3 -m http.server 8000
 # → http://localhost:8000
 ```
+
+`npx serve` や VS Code の Live Server 拡張でも構いません。
 
 ## 公開する
 

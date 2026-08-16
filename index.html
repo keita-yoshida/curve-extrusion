@@ -150,6 +150,50 @@
   <a href="https://github.com/keita-yoshida/curve-extrusion">GitHub</a>
 </footer>
 
+<!--
+  起動の見張り。モジュールが読み込めないと画面は表示されるのにボタンだけ無反応になり、
+  原因が分からなくなるため、通常スクリプト（モジュールでないので必ず動く）で検知して知らせる。
+-->
+<script>
+(function () {
+  var failed = null;
+
+  window.addEventListener('error', function (event) {
+    if (event.target && (event.target.tagName === 'SCRIPT' || event.target.tagName === 'LINK')) {
+      failed = event.target.src || event.target.href;
+    }
+  }, true);
+
+  function report() {
+    if (window.__curveExtrusionReady) return;
+
+    var isFile = location.protocol === 'file:';
+    var box = document.getElementById('messages');
+    if (!box) return;
+
+    var lines = isFile
+      ? [
+          'ブラウザの制限により、file:// で直接開くと JavaScript モジュールを読み込めません。そのためボタンが反応しません。',
+          'プロジェクトのフォルダで簡易サーバーを立てて開いてください:  python3 -m http.server 8000  →  http://localhost:8000'
+        ]
+      : [
+          'アプリを開始できませんでした。' + (failed ? '読み込みに失敗したファイル: ' + failed : 'ブラウザのコンソールにエラーが出ていないか確認してください。'),
+          '読み込み済みの古いファイルが残っている場合は、スーパーリロード（Ctrl+Shift+R / Cmd+Shift+R）をお試しください。'
+        ];
+
+    box.replaceChildren();
+
+    lines.forEach(function (text) {
+      var p = document.createElement('p');
+      p.className = 'message error';
+      p.textContent = text;
+      box.appendChild(p);
+    });
+  }
+
+  window.addEventListener('load', function () { setTimeout(report, 800); });
+})();
+</script>
 <script type="module" src="./assets/app.js"></script>
 </body>
 </html>
