@@ -1,7 +1,7 @@
 # Curve Extrusion
 
 SVG / DXF の閉じた図形を押し出して STL を書き出す Web アプリです。
-図形をその場で描くための **2Dエディター**（ベジェ・基本図形・パスファインダー）も内蔵しています。
+図形をその場で描くための **2Dエディター**（ベジェ・基本図形・文字・パスファインダー）も内蔵しています。
 
 **Python もサーバーも不要**で、ブラウザ内だけで完結します。ファイルはどこにもアップロードされません。
 
@@ -19,7 +19,8 @@ assets/
   svg-source.js            SVG → 閉領域、単位(mm)の読み取り
   dxf-source.js            DXF → 閉領域（円弧・スプライン・ブロック展開・線分の接続）
   editor.js                2Dエディター（キャンバス操作・レイヤー・プロパティ）
-  editor-shapes.js         図形モデル（矩形・楕円・多角形・星・ベジェパス）
+  editor-shapes.js         図形モデル（矩形・楕円・多角形・星・ベジェパス・文字）
+  fonts.js                 フォントの読み込みと 文字列 → 輪郭 の変換
   boolean.js               パスファインダー（図形 → ブーリアン → 閉領域）
   viewer.js                Three.js の3Dプレビュー
   style.css
@@ -27,6 +28,8 @@ vendor/
   three/                   Three.js r185（MIT）+ SVGLoader / STLExporter / OrbitControls
   dxf-parser/              dxf-parser 1.1.2（MIT）
   polygon-clipping/        polygon-clipping 0.15.7（MIT, 28KB・依存同梱）
+  opentype/                opentype.js 2.0.0（MIT）— 字形の輪郭取得
+  fonts/                   Kosugi Maru（Apache-2.0, 1.8MB・日本語6821字）
 app.py                     旧 Streamlit 版（参考用に残しています）
 ```
 
@@ -71,12 +74,31 @@ Netlify・Cloudflare Pages・S3 などにリポジトリの中身をそのまま
 | 選択 | クリックで選択、ドラッグで移動。角のハンドルで拡大縮小、上のハンドルで回転（Shift で15°刻み） |
 | 矩形 / 楕円 / 多角形 / 星 | キャンバスをドラッグして作成。辺の数・内半径比などは後から数値で変更できます |
 | ペン | クリックで角の頂点、ドラッグでベジェ曲線。最初の点をクリックするか Enter で閉じます |
+| 文字 | クリックした位置に文字を置きます。文字列・サイズ・字間・行間・揃えは数値で指定できます |
 | ノード | 頂点とハンドルを編集。ハンドルは既定で左右対称、Alt で分離。頂点をダブルクリックすると角 ↔ 曲線を切り替えます |
 
 グリッドスナップは 0.5〜10mm から選べ、**Alt を押している間だけ一時解除**されます。
 ホイールで拡大縮小、背景ドラッグ（または中ボタン）で表示移動。`Ctrl+Z` で取り消し、`Ctrl+D` で複製、`Delete` で削除。
 
 編集内容は localStorage に自動保存され、リロードしても残ります。
+
+### 文字
+
+同梱の **Kosugi Maru**（日本語6821字）で、そのまま日本語を打てます。
+フォントファイル（1.8MB）は文字ツールを最初に使ったときだけ読み込むので、通常の起動は軽いままです。
+
+**お手持ちのフォントも使えます。** 「フォントファイルを読み込む…」から `.ttf` / `.otf` / `.woff` を選んでください
+（Windows: `C:\Windows\Fonts`、Mac: `/System/Library/Fonts`）。読み込んだフォントは IndexedDB に保存され、次回も選べます。
+WOFF2 には対応していません。
+
+字形の輪郭は **em単位（フォントサイズ1）で保存**しているため、拡大縮小や移動・回転はフォントを読み直さなくても行えます。
+保存した作業をリロードしたときも、フォントを読み込む前から形が復元されます。
+
+現在のフォントに無い文字を使うと、その文字を挙げて警告します。
+
+> 文字を「くり抜き」にすると、`回` や `A` のように囲まれた部分は板から切り離された島になります。
+> ステンシルと同じ性質で、演算としては正しい結果です。切り抜きではなく彫り込みたい場合は、
+> 板の厚みより薄い別の板を用意するなどの工夫が必要です。
 
 ### パスファインダー（ブーリアン）
 
@@ -131,7 +153,7 @@ Netlify・Cloudflare Pages・S3 などにリポジトリの中身をそのまま
 | 曲線の粗さ | 固定 | 分割数を調整可能 |
 | 穴の判定 | 全体で包含判定 | パス単位（fill-rule 準拠）と全体を切替 |
 | 原点 | 入力座標のまま | XY中心を原点、Z下端を 0 に配置（切替可） |
-| 作図 | なし（外部ツールで用意） | ベジェ・基本図形・パスファインダーを内蔵 |
+| 作図 | なし（外部ツールで用意） | ベジェ・基本図形・文字・パスファインダーを内蔵 |
 
 `app.py` と `requirements.txt` / `packages.txt` は残してあるので、Streamlit 版も引き続きデプロイできます。
 
@@ -144,3 +166,5 @@ Netlify・Cloudflare Pages・S3 などにリポジトリの中身をそのまま
 - `vendor/three/LICENSE` — Three.js (MIT)
 - `vendor/dxf-parser/LICENSE` — dxf-parser (MIT)
 - `vendor/polygon-clipping/LICENSE` — polygon-clipping (MIT) / splaytree (MIT) / robust-predicates (Unlicense)
+- `vendor/opentype/LICENSE` — opentype.js (MIT)
+- `vendor/fonts/LICENSE` — Kosugi Maru (Apache-2.0)

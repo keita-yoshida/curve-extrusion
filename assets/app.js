@@ -4,6 +4,7 @@ import { extrudeRegions, regionsBoundingBox, transformRegions } from './regions.
 import { svgToRegions } from './svg-source.js';
 import { dxfToRegions } from './dxf-source.js';
 import { Editor } from './editor.js';
+import { DEFAULT_FONT_KEY, addFontFromFile, ensureDefaultFont, fontEntries, restoreStoredFonts } from './fonts.js';
 import { Viewer } from './viewer.js';
 
 const el = (id) => document.getElementById(id);
@@ -16,6 +17,9 @@ const ui = {
 	workspace: el('workspace'),
 	scaleField: el('scale-field'),
 	snap: el('snap'),
+	fontSelect: el('font-select'),
+	loadFont: el('load-font'),
+	fontFile: el('font-file'),
 	fitView: el('fit-view'),
 	clearShapes: el('clear-shapes'),
 	drop: el('drop'),
@@ -73,7 +77,10 @@ try {
 			hint: el('edit-hint'),
 			gridLabel: el('grid-label'),
 			layers: el('layers'),
-			properties: el('properties')
+			properties: el('properties'),
+			fontSelect: ui.fontSelect,
+			fontEntries,
+			onFontMissing: () => showMessages([{ text: 'フォントを読み込めていません。', tone: 'error' }])
 		},
 		{ onChange: () => rebuildSoon() }
 	);
@@ -215,6 +222,17 @@ function rebuild() {
 			ui.scaleMode.value === 'auto' && parsed.scale ? parsed.scale.source : `1単位 = ${formatNumber(scale)} mm`;
 	}
 
+	if (mode === 'draw') {
+		const missing = editor?.missingGlyphs() ?? [];
+
+		if (missing.length > 0) {
+			messages.push({
+				text: `フォントに無い文字があります: ${missing.join(' ')} — 別のフォントを読み込んでください。`,
+				tone: 'warn'
+			});
+		}
+	}
+
 	messages.unshift({
 		text: parsed.fixedScale ? '押し出しました。' : `変換しました（1単位 = ${formatNumber(scale)} mm）。`,
 		tone: 'ok'
@@ -290,6 +308,46 @@ function download() {
 	mesh.material.dispose();
 }
 
+let fontsReady = false;
+
+/** フォント一覧をプルダウンに反映する */
+function refreshFontSelect(selectKey) {
+	const previous = selectKey ?? ui.fontSelect.value;
+
+	ui.fontSelect.replaceChildren();
+
+	for (const entry of fontEntries()) {
+		const option = document.createElement('option');
+		option.value = entry.key;
+		option.textContent = entry.name;
+		ui.fontSelect.append(option);
+	}
+
+	if (previous && [...ui.fontSelect.options].some((o) => o.value === previous)) {
+		ui.fontSelect.value = previous;
+	}
+}
+
+/**
+ * 文字ツールで必要になったときに初めてフォントを用意する。
+ * 同梱フォントは 1.8MB あるので、最初の表示では読み込まない。
+ */
+async function ensureFonts() {
+	if (fontsReady) return true;
+
+	try {
+		await restoreStoredFonts();
+		await ensureDefaultFont();
+		fontsReady = true;
+		refreshFontSelect(DEFAULT_FONT_KEY);
+		return true;
+	} catch (error) {
+		console.error(error);
+		showMessages([{ text: error.message, tone: 'error' }]);
+		return false;
+	}
+}
+
 let editorFitted = false;
 
 function setMode(next) {
@@ -307,6 +365,8 @@ function setMode(next) {
 	}
 
 	if (next === 'draw' && editor) {
+		ensureFonts();
+
 		// 非表示の間はキャンバスの寸法が取れないので、表示されてから描き直す
 		requestAnimationFrame(() => {
 			if (!editorFitted && editor.shapes.length > 0) {
@@ -335,6 +395,27 @@ ui.snap.addEventListener('change', () => {
 
 	editor.snap = Number(ui.snap.value);
 	editor.render();
+});
+
+ui.loadFont.addEventListener('click', () => ui.fontFile.click());
+
+ui.fontFile.addEventListener('change', async () => {
+	const file = ui.fontFile.files[0];
+	if (!file) return;
+
+	try {
+		const entry = await addFontFromFile(file);
+		refreshFontSelect(entry.key);
+		showMessages([{ text: `フォント「${entry.name}」を読み込みました。`, tone: 'ok' }]);
+	} catch (error) {
+		console.error(error);
+		showMessages([
+			{ text: `フォントを読み込めませんでした: ${error.message}`, tone: 'error' },
+			{ text: 'WOFF2 形式には対応していません。.ttf / .otf / .woff をお試しください。', tone: 'warn' }
+		]);
+	}
+
+	ui.fontFile.value = '';
 });
 
 ui.fitView.addEventListener('click', () => editor?.fitView());

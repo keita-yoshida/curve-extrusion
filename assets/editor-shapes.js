@@ -16,7 +16,8 @@ export const SHAPE_LABELS = {
 	ellipse: '楕円',
 	polygon: '多角形',
 	star: '星',
-	path: 'パス'
+	path: 'パス',
+	text: '文字'
 };
 
 export const OP_LABELS = {
@@ -85,6 +86,11 @@ export function shapeCenter(shape) {
 			const xs = shape.nodes.map((n) => n.x);
 			const ys = shape.nodes.map((n) => n.y);
 			return [(Math.min(...xs) + Math.max(...xs)) / 2, (Math.min(...ys) + Math.max(...ys)) / 2];
+		}
+
+		case 'text': {
+			const box = shapeBounds(shape, 6);
+			return box ? [(box.minX + box.maxX) / 2, (box.minY + box.maxY) / 2] : [shape.x, shape.y];
 		}
 
 		default:
@@ -180,21 +186,24 @@ function pathContour(nodes) {
 	return { start: [nodes[0].x, nodes[0].y], segs };
 }
 
-/** 図形を「閉じた輪郭」に変換する（回転適用済み） */
-export function shapeToContour(shape) {
-	let contour;
+/**
+ * 図形を「閉じた輪郭」の配列に変換する（回転適用済み）。
+ * 文字は字形ごと・穴ごとに複数の輪郭を持つため、常に配列で扱う。
+ */
+export function shapeToContours(shape) {
+	let contours;
 
 	switch (shape.kind) {
 		case 'rect':
-			contour = rectContour(shape.x, shape.y, shape.w, shape.h, shape.radius);
+			contours = [rectContour(shape.x, shape.y, shape.w, shape.h, shape.radius)];
 			break;
 
 		case 'ellipse':
-			contour = ellipseContour(shape.cx, shape.cy, shape.rx, shape.ry);
+			contours = [ellipseContour(shape.cx, shape.cy, shape.rx, shape.ry)];
 			break;
 
 		case 'polygon':
-			contour = radialContour(shape.cx, shape.cy, Array(Math.max(3, shape.sides)).fill(shape.r));
+			contours = [radialContour(shape.cx, shape.cy, Array(Math.max(3, shape.sides)).fill(shape.r))];
 			break;
 
 		case 'star': {
@@ -202,27 +211,61 @@ export function shapeToContour(shape) {
 			for (let i = 0; i < Math.max(3, shape.points) * 2; i++) {
 				radii.push(i % 2 === 0 ? shape.r : shape.r * shape.innerRatio);
 			}
-			contour = radialContour(shape.cx, shape.cy, radii);
+			contours = [radialContour(shape.cx, shape.cy, radii)];
 			break;
 		}
 
-		case 'path':
-			contour = pathContour(shape.nodes);
+		case 'path': {
+			const contour = pathContour(shape.nodes);
+			contours = contour ? [contour] : [];
+			break;
+		}
+
+		case 'text':
+			// 輪郭は em 単位で保存してあるので、フォントサイズ倍して配置点へ移す
+			contours = mapContours(shape.contours ?? [], ([x, y]) => [
+				shape.x + x * shape.size,
+				shape.y + y * shape.size
+			]);
 			break;
 
 		default:
-			contour = null;
+			contours = [];
 	}
 
-	if (!contour || !shape.rotation) return contour;
+	if (contours.length === 0 || !shape.rotation) return contours;
 
-	const center = shapeCenter(shape);
-	const at = (p) => rotate(p, center, shape.rotation);
+	const center = rotationCenter(shape, contours);
 
-	return {
+	return mapContours(contours, (p) => rotate(p, center, shape.rotation));
+}
+
+function mapContours(contours, at) {
+	return contours.map((contour) => ({
 		start: at(contour.start),
 		segs: contour.segs.map((seg) => (seg.c1 ? cubic(at(seg.c1), at(seg.c2), at(seg.to)) : line(at(seg.to))))
-	};
+	}));
+}
+
+/** 回転の中心。文字は輪郭の外接矩形の中心を使う（shapeCenter の再帰を避ける） */
+function rotationCenter(shape, contours) {
+	if (shape.kind !== 'text') return shapeCenter(shape);
+
+	let minX = Infinity;
+	let minY = Infinity;
+	let maxX = -Infinity;
+	let maxY = -Infinity;
+
+	for (const contour of contours) {
+		for (const [x, y] of [contour.start, ...contour.segs.map((seg) => seg.to)]) {
+			minX = Math.min(minX, x);
+			minY = Math.min(minY, y);
+			maxX = Math.max(maxX, x);
+			maxY = Math.max(maxY, y);
+		}
+	}
+
+	return Number.isFinite(minX) ? [(minX + maxX) / 2, (minY + maxY) / 2] : [shape.x, shape.y];
 }
 
 /** 表示用の SVG パス文字列（曲線のまま出すのでズームしても滑らか） */
@@ -283,18 +326,42 @@ export function contourToPoints(contour, curveSegments = 32) {
 	return points;
 }
 
-export function shapeToPoints(shape, curveSegments) {
-	return contourToPoints(shapeToContour(shape), curveSegments);
+/** 表示用の SVG パス（複数輪郭はまとめて1つの d にする） */
+export function contoursToPathData(contours) {
+	return contours.map(contourToPathData).join('');
+}
+
+/**
+ * 押し出し・ブーリアン用の点列（輪郭ごとに1リング）。
+ *
+ * 字形の輪郭は短い曲線が多数つながってできているので、
+ * 図形と同じ分割数を掛けると面数が跳ね上がるだけで見た目は変わらない。
+ * そのため文字だけ分割を落とす。
+ */
+export function shapeToRings(shape, curveSegments) {
+	const divisions = shape.kind === 'text' ? Math.max(2, Math.round(curveSegments / 6)) : curveSegments;
+
+	return shapeToContours(shape)
+		.map((contour) => contourToPoints(contour, divisions))
+		.filter((ring) => ring.length >= 3);
 }
 
 export function shapeBounds(shape, curveSegments = 16) {
-	const points = shapeToPoints(shape, curveSegments);
-	if (points.length === 0) return null;
+	let minX = Infinity;
+	let minY = Infinity;
+	let maxX = -Infinity;
+	let maxY = -Infinity;
 
-	const xs = points.map((p) => p[0]);
-	const ys = points.map((p) => p[1]);
+	for (const ring of shapeToRings(shape, curveSegments)) {
+		for (const [x, y] of ring) {
+			minX = Math.min(minX, x);
+			minY = Math.min(minY, y);
+			maxX = Math.max(maxX, x);
+			maxY = Math.max(maxY, y);
+		}
+	}
 
-	return { minX: Math.min(...xs), minY: Math.min(...ys), maxX: Math.max(...xs), maxY: Math.max(...ys) };
+	return Number.isFinite(minX) ? { minX, minY, maxX, maxY } : null;
 }
 
 export function translateShape(shape, dx, dy) {
@@ -320,6 +387,11 @@ export function translateShape(shape, dx, dy) {
 				node.outX += dx;
 				node.outY += dy;
 			}
+			break;
+
+		case 'text':
+			shape.x += dx;
+			shape.y += dy;
 			break;
 	}
 }
@@ -363,6 +435,12 @@ export function scaleShape(shape, factor, [ax, ay]) {
 				[node.inX, node.inY] = at(node.inX, node.inY);
 				[node.outX, node.outY] = at(node.outX, node.outY);
 			}
+			break;
+
+		case 'text':
+			// 輪郭は em 単位なので、フォントサイズを変えるだけで拡大縮小できる
+			[shape.x, shape.y] = at(shape.x, shape.y);
+			shape.size *= factor;
 			break;
 	}
 }
@@ -412,6 +490,28 @@ export function shapeFields(shape) {
 
 		case 'path':
 			return common;
+
+		case 'text':
+			return [
+				{ key: 'text', label: '文字列', type: 'text', rebake: true },
+				{ key: 'size', label: 'サイズ', unit: 'mm', step: 1, min: 0.5 },
+				{ key: 'x', label: 'X', unit: 'mm', step: 1 },
+				{ key: 'y', label: 'Y', unit: 'mm', step: 1 },
+				{ key: 'tracking', label: '字間', unit: 'em', step: 0.02, min: -0.5, max: 2, rebake: true },
+				{ key: 'lineHeight', label: '行間', unit: '倍', step: 0.1, min: 0.5, max: 4, rebake: true },
+				{
+					key: 'align',
+					label: '揃え',
+					type: 'select',
+					rebake: true,
+					choices: [
+						['left', '左'],
+						['center', '中央'],
+						['right', '右']
+					]
+				},
+				...common
+			];
 
 		default:
 			return [];

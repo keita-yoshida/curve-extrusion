@@ -46,6 +46,14 @@
         </select>
       </div>
 
+      <div class="field">
+        <label for="font-select">フォント</label>
+        <select id="font-select"></select>
+        <button type="button" id="load-font" class="mini">フォントファイルを読み込む…</button>
+        <input type="file" id="font-file" accept=".ttf,.otf,.woff,font/ttf,font/otf,font/woff" hidden>
+        <p class="note">お手持ちの .ttf / .otf / .woff を追加できます（Windows: C:\Windows\Fonts、Mac: /System/Library/Fonts）。読み込んだフォントは次回も使えます。</p>
+      </div>
+
       <div class="subhead">
         <h2>図形</h2>
         <div class="subhead-actions">
@@ -108,6 +116,7 @@
       <button type="button" data-tool="polygon">多角形</button>
       <button type="button" data-tool="star">星</button>
       <button type="button" data-tool="pen">ペン</button>
+      <button type="button" data-tool="text">文字</button>
       <button type="button" data-tool="node">ノード</button>
     </div>
 

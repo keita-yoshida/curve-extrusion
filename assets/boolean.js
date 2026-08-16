@@ -1,4 +1,5 @@
-import { shapeToPoints } from './editor-shapes.js';
+import { shapeToRings } from './editor-shapes.js';
+import { nestLoops } from './regions.js';
 
 /**
  * パスファインダー（ブーリアン演算）。
@@ -14,13 +15,28 @@ const OPS = {
 	xor: (a, b) => self.polygonClipping.xor(a, b)
 };
 
+// polygon-clipping はリングが閉じている（先頭 == 末尾）ことを前提にする
+function closeRing(points) {
+	const ring = points.map((p) => (Array.isArray(p) ? [p[0], p[1]] : [p.x, p.y]));
+	ring.push([...ring[0]]);
+	return ring;
+}
+
 /** 図形1つを polygon-clipping の MultiPolygon（[[外周, 穴...], ...]）にする */
 function shapeToMultiPolygon(shape, curveSegments) {
-	const points = shapeToPoints(shape, curveSegments);
-	if (points.length < 3) return [];
+	const rings = shapeToRings(shape, curveSegments);
+	if (rings.length === 0) return [];
 
-	// polygon-clipping はリングが閉じている（先頭==末尾）ことを前提にする
-	return [[[...points, points[0]]]];
+	if (rings.length === 1) return [[closeRing(rings[0])]];
+
+	// 文字は字形ごと・穴ごとに輪郭を持つので、まず内外を判定して穴に振り分ける。
+	// そのうえで union をかけ、字形どうしが重なっている場合も1つに解消する。
+	const regions = nestLoops(rings.map((ring) => ring.map(([x, y]) => ({ x, y }))));
+	if (regions.length === 0) return [];
+
+	const multiPolygon = regions.map((region) => [closeRing(region.contour), ...region.holes.map(closeRing)]);
+
+	return self.polygonClipping.union(multiPolygon);
 }
 
 /**
