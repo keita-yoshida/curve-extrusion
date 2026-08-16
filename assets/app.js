@@ -1,4 +1,4 @@
-import * as THREE from 'three';
+import * as THREE from '../vendor/three/three.module.min.js';
 import { STLExporter } from '../vendor/three/STLExporter.js';
 import { extrudeRegions, regionsBoundingBox, transformRegions } from './regions.js';
 import { svgToRegions } from './svg-source.js';
