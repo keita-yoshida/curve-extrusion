@@ -1,6 +1,7 @@
 # Curve Extrusion
 
 SVG / DXF の閉じた図形を押し出して STL を書き出す Web アプリです。
+図形をその場で描くための **2Dエディター**（ベジェ・基本図形・パスファインダー）も内蔵しています。
 
 **Python もサーバーも不要**で、ブラウザ内だけで完結します。ファイルはどこにもアップロードされません。
 
@@ -13,15 +14,19 @@ SVG / DXF の閉じた図形を押し出して STL を書き出す Web アプリ
 ```
 index.html                 UI
 assets/
-  app.js                   画面の配線・状態管理
+  app.js                   画面の配線・状態管理・モード切替
   regions.js               閉ループの入れ子判定／押し出し
   svg-source.js            SVG → 閉領域、単位(mm)の読み取り
   dxf-source.js            DXF → 閉領域（円弧・スプライン・ブロック展開・線分の接続）
+  editor.js                2Dエディター（キャンバス操作・レイヤー・プロパティ）
+  editor-shapes.js         図形モデル（矩形・楕円・多角形・星・ベジェパス）
+  boolean.js               パスファインダー（図形 → ブーリアン → 閉領域）
   viewer.js                Three.js の3Dプレビュー
   style.css
 vendor/
   three/                   Three.js r185（MIT）+ SVGLoader / STLExporter / OrbitControls
   dxf-parser/              dxf-parser 1.1.2（MIT）
+  polygon-clipping/        polygon-clipping 0.15.7（MIT, 28KB・依存同梱）
 app.py                     旧 Streamlit 版（参考用に残しています）
 ```
 
@@ -44,6 +49,43 @@ python3 -m http.server 8000
 2. `main` に push する
 
 Netlify・Cloudflare Pages・S3 などにリポジトリの中身をそのまま置いても動きます（ビルドコマンドなし、公開ディレクトリはルート）。
+
+---
+
+## 図形エディター
+
+サイドバー上部の「図形を描く」に切り替えると、2Dエディターと3Dプレビューが並びます。
+座標はそのまま **mm** で、描いた形はリアルタイムに押し出されます。
+
+### ツール
+
+| ツール | 操作 |
+| --- | --- |
+| 選択 | クリックで選択、ドラッグで移動。角のハンドルで拡大縮小、上のハンドルで回転（Shift で15°刻み） |
+| 矩形 / 楕円 / 多角形 / 星 | キャンバスをドラッグして作成。辺の数・内半径比などは後から数値で変更できます |
+| ペン | クリックで角の頂点、ドラッグでベジェ曲線。最初の点をクリックするか Enter で閉じます |
+| ノード | 頂点とハンドルを編集。ハンドルは既定で左右対称、Alt で分離。頂点をダブルクリックすると角 ↔ 曲線を切り替えます |
+
+グリッドスナップは 0.5〜10mm から選べ、**Alt を押している間だけ一時解除**されます。
+ホイールで拡大縮小、背景ドラッグ（または中ボタン）で表示移動。`Ctrl+Z` で取り消し、`Ctrl+D` で複製、`Delete` で削除。
+
+編集内容は localStorage に自動保存され、リロードしても残ります。
+
+### パスファインダー（ブーリアン）
+
+図形リストの各行で演算を選びます。**下から順に畳み込む**方式で、一番下の図形が土台です。
+
+| 演算 | 動作 |
+| --- | --- |
+| 合体 | それまでの結果に足す |
+| くり抜き | それまでの結果から引く |
+| 交差 | 重なっている部分だけ残す |
+| 排他 | 重なっていない部分だけ残す |
+
+図形はベジェのまま保持され、演算は**押し出す直前の平坦化済みポリゴンに対してのみ**行われます。
+そのため後からいつでも辺の数や曲線を編集し直せます（非破壊）。
+
+結果は穴も含めて正しい多角形になるため、押し出したメッシュは水密（非多様体エッジ 0）になります。
 
 ---
 
@@ -82,6 +124,7 @@ Netlify・Cloudflare Pages・S3 などにリポジトリの中身をそのまま
 | 曲線の粗さ | 固定 | 分割数を調整可能 |
 | 穴の判定 | 全体で包含判定 | パス単位（fill-rule 準拠）と全体を切替 |
 | 原点 | 入力座標のまま | XY中心を原点、Z下端を 0 に配置（切替可） |
+| 作図 | なし（外部ツールで用意） | ベジェ・基本図形・パスファインダーを内蔵 |
 
 `app.py` と `requirements.txt` / `packages.txt` は残してあるので、Streamlit 版も引き続きデプロイできます。
 
@@ -89,4 +132,8 @@ Netlify・Cloudflare Pages・S3 などにリポジトリの中身をそのまま
 
 ## ライセンス
 
-同梱ライブラリのライセンスは `vendor/three/LICENSE`（Three.js, MIT）および `vendor/dxf-parser/LICENSE`（dxf-parser, MIT）を参照してください。
+同梱ライブラリのライセンスは以下を参照してください。
+
+- `vendor/three/LICENSE` — Three.js (MIT)
+- `vendor/dxf-parser/LICENSE` — dxf-parser (MIT)
+- `vendor/polygon-clipping/LICENSE` — polygon-clipping (MIT) / splaytree (MIT) / robust-predicates (Unlicense)

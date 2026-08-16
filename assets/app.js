@@ -3,11 +3,21 @@ import { STLExporter } from '../vendor/three/STLExporter.js';
 import { extrudeRegions, regionsBoundingBox, transformRegions } from './regions.js';
 import { svgToRegions } from './svg-source.js';
 import { dxfToRegions } from './dxf-source.js';
+import { Editor } from './editor.js';
 import { Viewer } from './viewer.js';
 
 const el = (id) => document.getElementById(id);
 
 const ui = {
+	modeSwitch: el('mode-switch'),
+	fileControls: el('file-controls'),
+	drawControls: el('draw-controls'),
+	editorPane: el('editor-pane'),
+	workspace: el('workspace'),
+	scaleField: el('scale-field'),
+	snap: el('snap'),
+	fitView: el('fit-view'),
+	clearShapes: el('clear-shapes'),
 	drop: el('drop'),
 	file: el('file'),
 	filename: el('filename'),
@@ -34,9 +44,25 @@ const ui = {
 const viewer = new Viewer(el('canvas'));
 const exporter = new STLExporter();
 
+/** 'file' = SVG/DXF を読み込む / 'draw' = エディターで描く */
+let mode = 'file';
+
 /** 読み込み済みファイルの内容と、そこから作った素の（未スケーリングの）リージョン */
 let source = null;
 let geometry = null;
+
+const editor = new Editor(
+	{
+		pane: ui.editorPane,
+		svg: el('edit-svg'),
+		tools: el('edit-tools'),
+		hint: el('edit-hint'),
+		gridLabel: el('grid-label'),
+		layers: el('layers'),
+		properties: el('properties')
+	},
+	{ onChange: () => rebuildSoon() }
+);
 
 function showMessages(items) {
 	ui.messages.replaceChildren();
@@ -69,8 +95,29 @@ function parseSource() {
 	return { ...dxfToRegions(source.text, { curveSegments }), flipY: false };
 }
 
+/** 現在のモードに応じた押し出し元のリージョン群を返す */
+function currentParsed() {
+	if (mode === 'draw') {
+		// エディターの座標はそのまま mm。Y軸は画面と同じ下向きなので反転する
+		return {
+			regions: editor.toRegions(Number(ui.segments.value)),
+			warnings: [],
+			flipY: true,
+			fixedScale: true
+		};
+	}
+
+	if (!source) return null;
+
+	source.parsed ??= parseSource();
+
+	return source.parsed;
+}
+
 /** スケールモードに応じて「1単位あたり何mmか」を決める */
 function resolveScale(parsed) {
+	if (parsed.fixedScale) return 1;
+
 	const mode = ui.scaleMode.value;
 	const value = Number(ui.scaleValue.value);
 
@@ -84,14 +131,11 @@ function resolveScale(parsed) {
 }
 
 function rebuild() {
-	if (!source) return;
-
 	const messages = [];
 	let parsed;
 
 	try {
-		parsed = source.parsed ?? parseSource();
-		source.parsed = parsed;
+		parsed = currentParsed();
 	} catch (error) {
 		console.error(error);
 		showMessages([{ text: `解析に失敗しました: ${error.message}`, tone: 'error' }]);
@@ -99,14 +143,21 @@ function rebuild() {
 		return;
 	}
 
+	if (!parsed) return;
+
 	for (const warning of parsed.warnings ?? []) messages.push({ text: warning, tone: 'warn' });
 
 	if (parsed.regions.length === 0) {
-		messages.push({
-			text: '閉じた領域が見つかりませんでした。パスが閉じている（塗りつぶせる形状になっている）か確認してください。',
-			tone: 'error'
-		});
-		showMessages(messages);
+		if (mode === 'draw') {
+			showMessages(editor.shapes.length === 0 ? [] : [{ text: '演算の結果、形が残りませんでした。', tone: 'warn' }]);
+		} else {
+			messages.push({
+				text: '閉じた領域が見つかりませんでした。パスが閉じている（塗りつぶせる形状になっている）か確認してください。',
+				tone: 'error'
+			});
+			showMessages(messages);
+		}
+
 		reset();
 		return;
 	}
@@ -139,10 +190,15 @@ function rebuild() {
 	ui.placeholder.hidden = true;
 	ui.download.disabled = false;
 
-	ui.scaleNote.textContent =
-		ui.scaleMode.value === 'auto' && parsed.scale ? parsed.scale.source : `1単位 = ${formatNumber(scale)} mm`;
+	if (!parsed.fixedScale) {
+		ui.scaleNote.textContent =
+			ui.scaleMode.value === 'auto' && parsed.scale ? parsed.scale.source : `1単位 = ${formatNumber(scale)} mm`;
+	}
 
-	messages.unshift({ text: `変換しました（1単位 = ${formatNumber(scale)} mm）。`, tone: 'ok' });
+	messages.unshift({
+		text: parsed.fixedScale ? '押し出しました。' : `変換しました（1単位 = ${formatNumber(scale)} mm）。`,
+		tone: 'ok'
+	});
 	showMessages(messages);
 }
 
@@ -168,16 +224,17 @@ async function loadFile(file) {
 
 	ui.filename.textContent = file.name;
 	ui.filename.hidden = false;
-	ui.holeModeField.hidden = ext !== 'svg';
+
+	// ファイルを落とされたら描画モードから自動で切り替える
+	if (mode !== 'file') setMode('file');
+	else ui.holeModeField.hidden = ext !== 'svg';
 
 	rebuild();
 }
 
 /** 解析結果を破棄して作り直す（分割数・穴の判定など、パース結果に影響する変更） */
 function reparse() {
-	if (!source) return;
-
-	source.parsed = null;
+	if (source) source.parsed = null;
 	rebuild();
 }
 
@@ -195,23 +252,71 @@ const rebuildSoon = debounce(rebuild);
 const reparseSoon = debounce(reparse);
 
 function download() {
-	if (!geometry || !source) return;
+	if (!geometry) return;
 
 	const mesh = new THREE.Mesh(geometry, new THREE.MeshBasicMaterial());
 	const data = exporter.parse(mesh, { binary: true });
 	const blob = new Blob([data.buffer ?? data], { type: 'model/stl' });
 	const url = URL.createObjectURL(blob);
 
+	const base = mode === 'draw' ? 'drawing' : source.name.replace(/\.[^.]+$/, '');
+
 	const link = document.createElement('a');
 	link.href = url;
-	link.download = `${source.name.replace(/\.[^.]+$/, '')}_extruded.stl`;
+	link.download = `${base}_extruded.stl`;
 	link.click();
 
 	URL.revokeObjectURL(url);
 	mesh.material.dispose();
 }
 
+let editorFitted = false;
+
+function setMode(next) {
+	mode = next;
+
+	ui.fileControls.hidden = next !== 'file';
+	ui.drawControls.hidden = next !== 'draw';
+	ui.editorPane.hidden = next !== 'draw';
+	ui.scaleField.hidden = next === 'draw';
+	ui.holeModeField.hidden = next === 'draw' || source?.kind !== 'svg';
+	ui.workspace.classList.toggle('split', next === 'draw');
+
+	for (const button of ui.modeSwitch.querySelectorAll('[data-mode]')) {
+		button.classList.toggle('is-active', button.dataset.mode === next);
+	}
+
+	if (next === 'draw') {
+		// 非表示の間はキャンバスの寸法が取れないので、表示されてから描き直す
+		requestAnimationFrame(() => {
+			if (!editorFitted && editor.shapes.length > 0) {
+				editor.fitView();
+				editorFitted = true;
+			} else {
+				editor.render();
+			}
+		});
+	}
+
+	reset();
+	showMessages([]);
+	rebuild();
+}
+
 // --- イベント配線 ---
+
+ui.modeSwitch.addEventListener('click', (event) => {
+	const button = event.target.closest('[data-mode]');
+	if (button) setMode(button.dataset.mode);
+});
+
+ui.snap.addEventListener('change', () => {
+	editor.snap = Number(ui.snap.value);
+	editor.render();
+});
+
+ui.fitView.addEventListener('click', () => editor.fitView());
+ui.clearShapes.addEventListener('click', () => editor.clearAll());
 
 ui.drop.addEventListener('click', () => ui.file.click());
 ui.drop.addEventListener('keydown', (event) => {

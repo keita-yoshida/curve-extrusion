@@ -8,6 +8,7 @@
 <link rel="stylesheet" href="./assets/style.css">
 <link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 32 32'%3E%3Crect width='32' height='32' rx='7' fill='%23111a26'/%3E%3Cpath d='M8 20 L14 9 L24 9 L18 20 Z' fill='none' stroke='%236aa9ff' stroke-width='2.2' stroke-linejoin='round'/%3E%3Cpath d='M8 20 L8 24 L18 24 L18 20' fill='none' stroke='%236aa9ff' stroke-width='2.2' stroke-linejoin='round'/%3E%3C/svg%3E">
 <script src="./vendor/dxf-parser/dxf-parser.js"></script>
+<script src="./vendor/polygon-clipping/polygon-clipping.umd.min.js"></script>
 <script type="importmap">
 {
   "imports": {
@@ -25,20 +26,52 @@
 
 <main class="layout">
   <section class="panel" aria-label="設定">
-    <div id="drop" class="dropzone" tabindex="0" role="button" aria-label="ベクターファイルを選択">
-      <strong>ファイルをドロップ</strong>
-      <span>またはクリックして選択（.svg / .dxf）</span>
-      <input type="file" id="file" accept=".svg,.dxf,image/svg+xml" hidden>
+    <div class="segmented" role="tablist" id="mode-switch">
+      <button type="button" data-mode="file" class="is-active" role="tab">ファイルを開く</button>
+      <button type="button" data-mode="draw" role="tab">図形を描く</button>
     </div>
 
-    <p id="filename" class="filename" hidden></p>
+    <div id="file-controls">
+      <div id="drop" class="dropzone" tabindex="0" role="button" aria-label="ベクターファイルを選択">
+        <strong>ファイルをドロップ</strong>
+        <span>またはクリックして選択（.svg / .dxf）</span>
+        <input type="file" id="file" accept=".svg,.dxf,image/svg+xml" hidden>
+      </div>
+
+      <p id="filename" class="filename" hidden></p>
+    </div>
+
+    <div id="draw-controls" hidden>
+      <div class="field">
+        <label for="snap">グリッドスナップ</label>
+        <select id="snap">
+          <option value="0">なし</option>
+          <option value="0.5">0.5 mm</option>
+          <option value="1" selected>1 mm</option>
+          <option value="5">5 mm</option>
+          <option value="10">10 mm</option>
+        </select>
+      </div>
+
+      <div class="subhead">
+        <h2>図形</h2>
+        <div class="subhead-actions">
+          <button type="button" id="fit-view" class="mini">全体表示</button>
+          <button type="button" id="clear-shapes" class="mini">全消去</button>
+        </div>
+      </div>
+      <div id="layers" class="layers"></div>
+
+      <div class="subhead"><h2>プロパティ</h2></div>
+      <div id="properties"></div>
+    </div>
 
     <div class="field">
       <label for="thickness">押し出し厚み <span class="unit">mm</span></label>
       <input type="number" id="thickness" value="5" min="0.05" step="0.1">
     </div>
 
-    <fieldset class="field">
+    <fieldset class="field" id="scale-field">
       <legend>実寸の決め方</legend>
       <select id="scale-mode">
         <option value="auto">ファイルの単位から自動</option>
@@ -72,6 +105,27 @@
     <button type="button" id="download" class="primary" disabled>STL をダウンロード</button>
   </section>
 
+  <div class="workspace" id="workspace">
+
+  <section class="viewport editor-pane" id="editor-pane" aria-label="2Dエディター" hidden>
+    <div class="toolbar" id="edit-tools">
+      <button type="button" data-tool="select" class="is-active">選択</button>
+      <button type="button" data-tool="rect">矩形</button>
+      <button type="button" data-tool="ellipse">楕円</button>
+      <button type="button" data-tool="polygon">多角形</button>
+      <button type="button" data-tool="star">星</button>
+      <button type="button" data-tool="pen">ペン</button>
+      <button type="button" data-tool="node">ノード</button>
+    </div>
+
+    <div class="canvas-wrap edit-wrap">
+      <svg id="edit-svg" role="application" aria-label="図形編集キャンバス"></svg>
+      <span id="grid-label" class="corner-label"></span>
+    </div>
+
+    <p id="edit-hint" class="note"></p>
+  </section>
+
   <section class="viewport" aria-label="3Dプレビュー">
     <div class="canvas-wrap">
       <canvas id="canvas"></canvas>
@@ -87,6 +141,8 @@
 
     <div id="messages" class="messages" role="status" aria-live="polite"></div>
   </section>
+
+  </div>
 </main>
 
 <footer class="footer">
