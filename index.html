@@ -1,0 +1,99 @@
+<!DOCTYPE html>
+<html lang="ja">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Curve Extrusion — SVG/DXF to STL</title>
+<meta name="description" content="SVG・DXF の閉じた図形をブラウザだけで押し出して STL に変換します。ファイルはアップロードされません。">
+<link rel="stylesheet" href="./assets/style.css">
+<link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 32 32'%3E%3Crect width='32' height='32' rx='7' fill='%23111a26'/%3E%3Cpath d='M8 20 L14 9 L24 9 L18 20 Z' fill='none' stroke='%236aa9ff' stroke-width='2.2' stroke-linejoin='round'/%3E%3Cpath d='M8 20 L8 24 L18 24 L18 20' fill='none' stroke='%236aa9ff' stroke-width='2.2' stroke-linejoin='round'/%3E%3C/svg%3E">
+<script src="./vendor/dxf-parser/dxf-parser.js"></script>
+<script type="importmap">
+{
+  "imports": {
+    "three": "./vendor/three/three.module.min.js"
+  }
+}
+</script>
+</head>
+<body>
+
+<header class="topbar">
+  <h1>Curve Extrusion</h1>
+  <p>SVG / DXF の閉じた図形を押し出して STL を書き出します。処理はすべてブラウザ内で完結し、ファイルはどこにも送信されません。</p>
+</header>
+
+<main class="layout">
+  <section class="panel" aria-label="設定">
+    <div id="drop" class="dropzone" tabindex="0" role="button" aria-label="ベクターファイルを選択">
+      <strong>ファイルをドロップ</strong>
+      <span>またはクリックして選択（.svg / .dxf）</span>
+      <input type="file" id="file" accept=".svg,.dxf,image/svg+xml" hidden>
+    </div>
+
+    <p id="filename" class="filename" hidden></p>
+
+    <div class="field">
+      <label for="thickness">押し出し厚み <span class="unit">mm</span></label>
+      <input type="number" id="thickness" value="5" min="0.05" step="0.1">
+    </div>
+
+    <fieldset class="field">
+      <legend>実寸の決め方</legend>
+      <select id="scale-mode">
+        <option value="auto">ファイルの単位から自動</option>
+        <option value="manual">倍率を指定（1単位 = N mm）</option>
+        <option value="width">幅を指定（mm）</option>
+        <option value="height">高さを指定（mm）</option>
+      </select>
+      <input type="number" id="scale-value" value="1" min="0.0001" step="0.1" hidden>
+      <p id="scale-note" class="note"></p>
+    </fieldset>
+
+    <div class="field">
+      <label for="segments">曲線の分割数 <output id="segments-out">32</output></label>
+      <input type="range" id="segments" min="4" max="128" step="4" value="32">
+      <p class="note">大きくすると曲線が滑らかになり、面数が増えます。</p>
+    </div>
+
+    <div class="field" id="hole-mode-field">
+      <label for="hole-mode">穴の判定方法</label>
+      <select id="hole-mode">
+        <option value="path">パス単位（SVG の fill-rule に従う）</option>
+        <option value="global">図形全体（別パスの穴も抜く）</option>
+      </select>
+    </div>
+
+    <div class="checks">
+      <label><input type="checkbox" id="center" checked> 原点を中心に配置</label>
+      <label><input type="checkbox" id="edges" checked> 稜線を表示</label>
+    </div>
+
+    <button type="button" id="download" class="primary" disabled>STL をダウンロード</button>
+  </section>
+
+  <section class="viewport" aria-label="3Dプレビュー">
+    <div class="canvas-wrap">
+      <canvas id="canvas"></canvas>
+      <p id="placeholder" class="placeholder">ファイルを読み込むとここにプレビューが表示されます</p>
+    </div>
+
+    <dl class="stats" id="stats" hidden>
+      <div><dt>サイズ (X×Y×Z)</dt><dd id="stat-size">—</dd></div>
+      <div><dt>閉じた領域</dt><dd id="stat-regions">—</dd></div>
+      <div><dt>頂点数</dt><dd id="stat-vertices">—</dd></div>
+      <div><dt>三角形数</dt><dd id="stat-faces">—</dd></div>
+    </dl>
+
+    <div id="messages" class="messages" role="status" aria-live="polite"></div>
+  </section>
+</main>
+
+<footer class="footer">
+  <span>WebGL / Three.js によるクライアントサイド処理</span>
+  <a href="https://github.com/keita-yoshida/curve-extrusion">GitHub</a>
+</footer>
+
+<script type="module" src="./assets/app.js"></script>
+</body>
+</html>
