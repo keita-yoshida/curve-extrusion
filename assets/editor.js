@@ -170,15 +170,22 @@ export class Editor {
 	 * 数値を意識せずに浮き出し・彫り込み・貫通を切り替えられるようにするため。
 	 */
 	applyZPreset(id, preset) {
-		const index = this.indexOf(id);
 		const shape = this.byId(id);
-		if (!shape || index < 0) return;
-
-		const below = this.shapes.slice(0, index).filter((s) => !s.hidden);
-		const top = below.length > 0 ? Math.max(...below.map(shapeTop)) : 0;
-		const bottom = below.length > 0 ? Math.min(...below.map((s) => s.z)) : 0;
+		if (!shape) return;
 
 		this.pushUndo();
+
+		// どれも「下にある図形に対して」の操作なので、演算順でも一番手前へ移す。
+		// 文字を置いてから板を描いた場合、そのままでは文字が土台になり演算が効かない。
+		const index = this.indexOf(id);
+		if (index >= 0 && index !== this.shapes.length - 1) {
+			this.shapes.splice(index, 1);
+			this.shapes.push(shape);
+		}
+
+		const below = this.shapes.slice(0, -1).filter((s) => !s.hidden);
+		const top = below.length > 0 ? Math.max(...below.map(shapeTop)) : 0;
+		const bottom = below.length > 0 ? Math.min(...below.map((s) => s.z)) : 0;
 
 		if (preset === 'raise') {
 			shape.z = top;
@@ -281,6 +288,17 @@ export class Editor {
 		shape.fontKey = fontKey;
 		this.rebakeText(shape);
 		this.changed();
+	}
+
+	/**
+	 * 一番下の図形は土台になるため、そこに指定した演算は効かない。
+	 * 黙って無視されると原因が分からないので、警告文を返す。
+	 */
+	baseOpWarning() {
+		const base = this.shapes.find((shape) => !shape.hidden);
+		if (!base || base.op === 'union') return null;
+
+		return `一番下の「${SHAPE_LABELS[base.kind]} ${base.id}」は土台になるため「${OP_LABELS[base.op]}」が効きません。↑ で手前に移動するか、下に土台となる図形を追加してください。`;
 	}
 
 	/** 現在フォントに無い文字を集める（警告表示用） */
@@ -659,10 +677,19 @@ export class Editor {
 				option.value = value;
 				op.append(option);
 			}
-			op.value = shape.op;
-			// 一番下の図形は土台なので演算子を持たない
-			op.disabled = index === 0;
-			op.title = index === 0 ? '一番下の図形は土台になります' : 'ひとつ下までの結果に対する演算';
+
+			// 一番下の図形は土台。演算子を表示したままだと「効いている」ように見えるので置き換える
+			if (index === 0) {
+				const base = el('option', null, '土台（演算なし）');
+				base.value = '';
+				op.append(base);
+				op.value = '';
+				op.disabled = true;
+				op.title = '一番下の図形は土台になります。演算をかけたい図形は ↑ で手前に移動してください';
+			} else {
+				op.value = shape.op;
+				op.title = 'ひとつ下までの結果に対する演算';
+			}
 			op.addEventListener('change', () => {
 				const target = this.byId(id);
 				if (!target) return;
@@ -710,7 +737,7 @@ export class Editor {
 
 			parts.row.classList.toggle('is-selected', shape.id === this.selectedId);
 			parts.visibility.textContent = shape.hidden ? '◻' : '◼';
-			if (document.activeElement !== parts.op) parts.op.value = shape.op;
+			if (document.activeElement !== parts.op && !parts.op.disabled) parts.op.value = shape.op;
 		}
 	}
 

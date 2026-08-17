@@ -250,6 +250,9 @@ function rebuild() {
 	}
 
 	if (mode === 'draw') {
+		const baseWarning = editor?.baseOpWarning();
+		if (baseWarning) messages.push({ text: baseWarning, tone: 'warn' });
+
 		const missing = editor?.missingGlyphs() ?? [];
 
 		if (missing.length > 0) {
