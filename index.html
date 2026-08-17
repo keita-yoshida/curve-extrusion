@@ -9,13 +9,6 @@
 <link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 32 32'%3E%3Crect width='32' height='32' rx='7' fill='%23111a26'/%3E%3Cpath d='M8 20 L14 9 L24 9 L18 20 Z' fill='none' stroke='%236aa9ff' stroke-width='2.2' stroke-linejoin='round'/%3E%3Cpath d='M8 20 L8 24 L18 24 L18 20' fill='none' stroke='%236aa9ff' stroke-width='2.2' stroke-linejoin='round'/%3E%3C/svg%3E">
 <script src="./vendor/dxf-parser/dxf-parser.js"></script>
 <script src="./vendor/polygon-clipping/polygon-clipping.umd.min.js"></script>
-<script type="importmap">
-{
-  "imports": {
-    "three": "./vendor/three/three.module.min.js"
-  }
-}
-</script>
 </head>
 <body>
 
@@ -51,6 +44,14 @@
           <option value="5">5 mm</option>
           <option value="10">10 mm</option>
         </select>
+      </div>
+
+      <div class="field">
+        <label for="font-select">フォント</label>
+        <select id="font-select"></select>
+        <button type="button" id="load-font" class="mini">フォントファイルを読み込む…</button>
+        <input type="file" id="font-file" accept=".ttf,.otf,.woff,font/ttf,font/otf,font/woff" hidden>
+        <p class="note">お手持ちの .ttf / .otf / .woff を追加できます（Windows: C:\Windows\Fonts、Mac: /System/Library/Fonts）。読み込んだフォントは次回も使えます。</p>
       </div>
 
       <div class="subhead">
@@ -115,6 +116,7 @@
       <button type="button" data-tool="polygon">多角形</button>
       <button type="button" data-tool="star">星</button>
       <button type="button" data-tool="pen">ペン</button>
+      <button type="button" data-tool="text">文字</button>
       <button type="button" data-tool="node">ノード</button>
     </div>
 
@@ -150,6 +152,50 @@
   <a href="https://github.com/keita-yoshida/curve-extrusion">GitHub</a>
 </footer>
 
+<!--
+  起動の見張り。モジュールが読み込めないと画面は表示されるのにボタンだけ無反応になり、
+  原因が分からなくなるため、通常スクリプト（モジュールでないので必ず動く）で検知して知らせる。
+-->
+<script>
+(function () {
+  var failed = null;
+
+  window.addEventListener('error', function (event) {
+    if (event.target && (event.target.tagName === 'SCRIPT' || event.target.tagName === 'LINK')) {
+      failed = event.target.src || event.target.href;
+    }
+  }, true);
+
+  function report() {
+    if (window.__curveExtrusionReady) return;
+
+    var isFile = location.protocol === 'file:';
+    var box = document.getElementById('messages');
+    if (!box) return;
+
+    var lines = isFile
+      ? [
+          'ブラウザの制限により、file:// で直接開くと JavaScript モジュールを読み込めません。そのためボタンが反応しません。',
+          'プロジェクトのフォルダで簡易サーバーを立てて開いてください:  python3 -m http.server 8000  →  http://localhost:8000'
+        ]
+      : [
+          'アプリを開始できませんでした。' + (failed ? '読み込みに失敗したファイル: ' + failed : 'ブラウザのコンソールにエラーが出ていないか確認してください。'),
+          '読み込み済みの古いファイルが残っている場合は、スーパーリロード（Ctrl+Shift+R / Cmd+Shift+R）をお試しください。'
+        ];
+
+    box.replaceChildren();
+
+    lines.forEach(function (text) {
+      var p = document.createElement('p');
+      p.className = 'message error';
+      p.textContent = text;
+      box.appendChild(p);
+    });
+  }
+
+  window.addEventListener('load', function () { setTimeout(report, 800); });
+})();
+</script>
 <script type="module" src="./assets/app.js"></script>
 </body>
 </html>

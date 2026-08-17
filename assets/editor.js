@@ -2,17 +2,19 @@ import {
 	OP_LABELS,
 	SHAPE_LABELS,
 	contourToPathData,
+	contoursToPathData,
 	createNode,
 	createShape,
 	shapeBounds,
 	shapeCenter,
 	shapeFields,
 	shapeFromDrag,
-	shapeToContour,
+	shapeToContours,
 	scaleShape,
 	translateShape
 } from './editor-shapes.js';
 import { shapesToRegions } from './boolean.js';
+import { DEFAULT_FONT_KEY, buildTextContours, getFont } from './fonts.js';
 
 const NS = 'http://www.w3.org/2000/svg';
 const STORAGE_KEY = 'curve-extrusion:shapes';
@@ -156,6 +158,103 @@ export class Editor {
 		return shapesToRegions(this.shapes, curveSegments);
 	}
 
+	// --- 文字 ---
+
+	/**
+	 * 文字の輪郭を作り直す。輪郭は em 単位で持つので、
+	 * 移動・拡大・回転だけならフォントが無くても後から編集できる。
+	 */
+	rebakeText(shape) {
+		const entry = getFont(shape.fontKey) ?? getFont(DEFAULT_FONT_KEY);
+
+		if (!entry) {
+			this.refs.onFontMissing?.();
+			return false;
+		}
+
+		const { contours, missing } = buildTextContours(entry.font, {
+			text: shape.text,
+			tracking: shape.tracking,
+			lineHeight: shape.lineHeight,
+			align: shape.align
+		});
+
+		shape.fontKey = entry.key;
+		shape.fontName = entry.name;
+		shape.contours = contours;
+		shape.missing = missing;
+
+		return true;
+	}
+
+	/** 文字ツールのクリック。フォントが来るまで待ってから置く */
+	async placeText(point) {
+		const ready = await (this.refs.ensureFonts?.() ?? Promise.resolve(Boolean(getFont(DEFAULT_FONT_KEY))));
+		if (!ready) return;
+
+		this.addText(point, this.refs.fontSelect?.value || DEFAULT_FONT_KEY);
+	}
+
+	addText(point, fontKey) {
+		const shape = createShape('text', {
+			text: '文字',
+			x: point[0],
+			y: point[1],
+			size: 20,
+			tracking: 0,
+			lineHeight: 1.3,
+			align: 'left',
+			fontKey
+		});
+
+		// 輪郭を作れないまま置くと、見えない空の図形が残ってしまう
+		if (!this.rebakeText(shape)) return;
+
+		this.pushUndo();
+		this.shapes.push(shape);
+		this.selectedId = shape.id;
+		this.tool = 'select';
+		this.changed();
+
+		// すぐ打ち替えられるように文字列の入力欄へフォーカスする
+		this.refs.properties.querySelector('textarea')?.focus();
+	}
+
+	/** フォントが後から読めたときに、輪郭が空のままの文字を作り直す */
+	refreshTextShapes() {
+		let updated = false;
+
+		for (const shape of this.shapes) {
+			if (shape.kind !== 'text' || shape.contours?.length) continue;
+			if (this.rebakeText(shape)) updated = true;
+		}
+
+		if (updated) this.changed();
+		else this.render();
+	}
+
+	/** フォントを差し替えて、その文字図形を作り直す */
+	setShapeFont(id, fontKey) {
+		const shape = this.byId(id);
+		if (!shape || shape.kind !== 'text') return;
+
+		this.pushUndo();
+		shape.fontKey = fontKey;
+		this.rebakeText(shape);
+		this.changed();
+	}
+
+	/** 現在フォントに無い文字を集める（警告表示用） */
+	missingGlyphs() {
+		const missing = new Set();
+
+		for (const shape of this.shapes) {
+			for (const char of shape.missing ?? []) missing.add(char);
+		}
+
+		return [...missing];
+	}
+
 	// --- 座標変換 ---
 
 	toWorld(event) {
@@ -282,14 +381,14 @@ export class Editor {
 		this.outlineLayer.replaceChildren();
 
 		for (const shape of this.shapes) {
-			const contour = shapeToContour(shape);
-			if (!contour) continue;
+			const d = contoursToPathData(shapeToContours(shape));
+			if (!d) continue;
 
 			const selected = shape.id === this.selectedId;
 			const subtractive = shape.op === 'subtract' || shape.op === 'xor';
 
 			const path = svgEl('path', {
-				d: contourToPathData(contour),
+				d,
 				fill: 'none',
 				'pointer-events': 'all',
 				stroke: selected ? '#ffd166' : subtractive ? '#ff8f8f' : '#7f9bbb',
@@ -444,7 +543,7 @@ export class Editor {
 		if (nodes.length === 0) return;
 
 		const preview = { kind: 'path', nodes, rotation: 0 };
-		const contour = nodes.length >= 2 ? shapeToContour(preview) : null;
+		const [contour] = nodes.length >= 2 ? shapeToContours(preview) : [];
 
 		if (contour) {
 			this.overlayLayer.append(
@@ -599,11 +698,56 @@ export class Editor {
 			panel.append(el('p', 'note', `ノード ${shape.nodes.length} 個。「ノード」ツールで頂点とハンドルを編集できます。`));
 		}
 
+		if (shape.kind === 'text') {
+			panel.append(this.buildFontRow(shape));
+		}
+
 		const grid = el('div', 'prop-grid');
 
 		for (const field of shapeFields(shape)) {
-			const wrap = el('label', 'prop');
+			const wrap = el('label', `prop${field.type === 'text' ? ' prop-wide' : ''}`);
 			wrap.append(el('span', null, field.unit ? `${field.label} (${field.unit})` : field.label));
+
+			// 変更を図形へ書き戻す。オブジェクトは差し替わりうるので毎回 id で引き直す
+			const apply = (mutate) => {
+				const target = this.byId(shapeId);
+				if (!target) return;
+
+				this.pushUndo();
+				mutate(target);
+				if (field.rebake) this.rebakeText(target);
+				this.changed();
+			};
+
+			if (field.type === 'text') {
+				const area = el('textarea');
+				area.rows = 2;
+				area.value = shape[field.key] ?? '';
+				area.addEventListener('input', () => apply((target) => (target[field.key] = area.value)));
+
+				wrap.append(area);
+				grid.append(wrap);
+				this.propInputs.push({ input: area, field, toDisplay: (v) => v, raw: true });
+				continue;
+			}
+
+			if (field.type === 'select') {
+				const select = el('select');
+
+				for (const [value, label] of field.choices) {
+					const option = el('option', null, label);
+					option.value = value;
+					select.append(option);
+				}
+
+				select.value = shape[field.key];
+				select.addEventListener('change', () => apply((target) => (target[field.key] = select.value)));
+
+				wrap.append(select);
+				grid.append(wrap);
+				this.propInputs.push({ input: select, field, toDisplay: (v) => v, raw: true });
+				continue;
+			}
 
 			const input = el('input');
 			input.type = 'number';
@@ -617,19 +761,13 @@ export class Editor {
 			input.value = Number(toDisplay(shape[field.key] ?? 0).toFixed(field.integer ? 0 : 3));
 
 			input.addEventListener('change', () => {
-				// 図形オブジェクトは作成ドラッグや取り消しで差し替わるので、その都度 id で引き直す
-				const target = this.byId(shapeId);
-				if (!target) return;
-
 				let value = fromDisplay(Number(input.value));
 				if (!Number.isFinite(value)) return;
 				if (field.integer) value = Math.round(value);
 				if (field.min !== undefined) value = Math.max(fromDisplay(field.min), value);
 				if (field.max !== undefined) value = Math.min(fromDisplay(field.max), value);
 
-				this.pushUndo();
-				target[field.key] = value;
-				this.changed();
+				apply((target) => (target[field.key] = value));
 			});
 
 			wrap.append(input);
@@ -640,14 +778,36 @@ export class Editor {
 		panel.append(grid);
 	}
 
+	/** 文字図形のフォント選択行 */
+	buildFontRow(shape) {
+		const wrap = el('label', 'prop prop-wide');
+		wrap.append(el('span', null, 'フォント'));
+
+		const select = el('select');
+		const id = shape.id;
+
+		for (const entry of this.refs.fontEntries()) {
+			const option = el('option', null, entry.name);
+			option.value = entry.key;
+			select.append(option);
+		}
+
+		select.value = shape.fontKey;
+		select.addEventListener('change', () => this.setShapeFont(id, select.value));
+
+		wrap.append(select);
+
+		return wrap;
+	}
+
 	updatePropertyValues(shape) {
 		if (!shape) return;
 
-		for (const { input, field, toDisplay } of this.propInputs ?? []) {
+		for (const { input, field, toDisplay, raw } of this.propInputs ?? []) {
 			// 入力中の欄は書き換えない
 			if (document.activeElement === input) continue;
 
-			input.value = Number(toDisplay(shape[field.key] ?? 0).toFixed(field.integer ? 0 : 3));
+			input.value = raw ? (shape[field.key] ?? '') : Number(toDisplay(shape[field.key] ?? 0).toFixed(field.integer ? 0 : 3));
 		}
 	}
 
@@ -667,6 +827,8 @@ export class Editor {
 				return 'パスを選ぶと頂点とハンドルを編集できます。ハンドルは Alt でハンドルを分離、ダブルクリックで角と曲線を切替。';
 			case 'pen':
 				return 'クリックで頂点、ドラッグで曲線を描きます。';
+			case 'text':
+				return 'クリックした位置に文字を置きます。文字列やサイズは右の「プロパティ」で変更できます。';
 			default:
 				return 'キャンバスをドラッグして図形を作成します。Alt でスナップを一時解除。';
 		}
@@ -713,6 +875,9 @@ export class Editor {
 
 	setTool(tool) {
 		if (this.pen) this.finishPen(false);
+
+		// 置く前から取りに行っておくと、クリック時の待ちが短くなる
+		if (tool === 'text') this.refs.ensureFonts?.();
 
 		this.tool = tool;
 		this.render();
@@ -794,6 +959,12 @@ export class Editor {
 
 		if (this.tool === 'pen') {
 			this.onPenDown(raw, point);
+			return;
+		}
+
+		if (this.tool === 'text') {
+			this.drag = null;
+			this.placeText(point);
 			return;
 		}
 

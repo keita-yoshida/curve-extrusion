@@ -1,4 +1,4 @@
-import * as THREE from 'three';
+import * as THREE from '../vendor/three/three.module.min.js';
 
 /**
  * 「リージョン」= 1つの外周(contour)と0個以上の穴(holes)からなる閉じた領域。

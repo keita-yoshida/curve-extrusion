@@ -1,9 +1,10 @@
-import * as THREE from 'three';
+import * as THREE from '../vendor/three/three.module.min.js';
 import { STLExporter } from '../vendor/three/STLExporter.js';
 import { extrudeRegions, regionsBoundingBox, transformRegions } from './regions.js';
 import { svgToRegions } from './svg-source.js';
 import { dxfToRegions } from './dxf-source.js';
 import { Editor } from './editor.js';
+import { DEFAULT_FONT_KEY, addFontFromFile, ensureDefaultFont, fontEntries, restoreStoredFonts } from './fonts.js';
 import { Viewer } from './viewer.js';
 
 const el = (id) => document.getElementById(id);
@@ -16,6 +17,9 @@ const ui = {
 	workspace: el('workspace'),
 	scaleField: el('scale-field'),
 	snap: el('snap'),
+	fontSelect: el('font-select'),
+	loadFont: el('load-font'),
+	fontFile: el('font-file'),
 	fitView: el('fit-view'),
 	clearShapes: el('clear-shapes'),
 	drop: el('drop'),
@@ -41,7 +45,6 @@ const ui = {
 	messages: el('messages')
 };
 
-const viewer = new Viewer(el('canvas'));
 const exporter = new STLExporter();
 
 /** 'file' = SVG/DXF を読み込む / 'draw' = エディターで描く */
@@ -51,18 +54,41 @@ let mode = 'file';
 let source = null;
 let geometry = null;
 
-const editor = new Editor(
-	{
-		pane: ui.editorPane,
-		svg: el('edit-svg'),
-		tools: el('edit-tools'),
-		hint: el('edit-hint'),
-		gridLabel: el('grid-label'),
-		layers: el('layers'),
-		properties: el('properties')
-	},
-	{ onChange: () => rebuildSoon() }
-);
+// 片方の初期化に失敗しても、もう片方と操作は生かす。
+// 途中で例外が飛ぶとイベント登録に到達せず、画面全体が無反応になるため。
+const startupErrors = [];
+
+let viewer = null;
+let editor = null;
+
+try {
+	viewer = new Viewer(el('canvas'));
+} catch (error) {
+	console.error(error);
+	startupErrors.push(`3Dプレビューを開始できませんでした（WebGL が無効の可能性があります）: ${error.message}`);
+}
+
+try {
+	editor = new Editor(
+		{
+			pane: ui.editorPane,
+			svg: el('edit-svg'),
+			tools: el('edit-tools'),
+			hint: el('edit-hint'),
+			gridLabel: el('grid-label'),
+			layers: el('layers'),
+			properties: el('properties'),
+			fontSelect: ui.fontSelect,
+			fontEntries,
+			ensureFonts: () => ensureFonts(),
+			onFontMissing: () => showMessages([{ text: 'フォントを読み込めていません。', tone: 'error' }])
+		},
+		{ onChange: () => rebuildSoon() }
+	);
+} catch (error) {
+	console.error(error);
+	startupErrors.push(`図形エディターを開始できませんでした: ${error.message}`);
+}
 
 function showMessages(items) {
 	ui.messages.replaceChildren();
@@ -98,6 +124,8 @@ function parseSource() {
 /** 現在のモードに応じた押し出し元のリージョン群を返す */
 function currentParsed() {
 	if (mode === 'draw') {
+		if (!editor) return null;
+
 		// エディターの座標はそのまま mm。Y軸は画面と同じ下向きなので反転する
 		return {
 			regions: editor.toRegions(Number(ui.segments.value)),
@@ -149,7 +177,7 @@ function rebuild() {
 
 	if (parsed.regions.length === 0) {
 		if (mode === 'draw') {
-			showMessages(editor.shapes.length === 0 ? [] : [{ text: '演算の結果、形が残りませんでした。', tone: 'warn' }]);
+			showMessages(editor?.shapes.length ? [{ text: '演算の結果、形が残りませんでした。', tone: 'warn' }] : []);
 		} else {
 			messages.push({
 				text: '閉じた領域が見つかりませんでした。パスが閉じている（塗りつぶせる形状になっている）か確認してください。',
@@ -175,8 +203,8 @@ function rebuild() {
 		return;
 	}
 
-	viewer.setGeometry(geometry);
-	viewer.setEdgesVisible(ui.edges.checked);
+	viewer?.setGeometry(geometry);
+	viewer?.setEdgesVisible(ui.edges.checked);
 
 	const size = geometry.boundingBox.getSize(new THREE.Vector3());
 	const holes = parsed.regions.reduce((sum, region) => sum + region.holes.length, 0);
@@ -195,6 +223,17 @@ function rebuild() {
 			ui.scaleMode.value === 'auto' && parsed.scale ? parsed.scale.source : `1単位 = ${formatNumber(scale)} mm`;
 	}
 
+	if (mode === 'draw') {
+		const missing = editor?.missingGlyphs() ?? [];
+
+		if (missing.length > 0) {
+			messages.push({
+				text: `フォントに無い文字があります: ${missing.join(' ')} — 別のフォントを読み込んでください。`,
+				tone: 'warn'
+			});
+		}
+	}
+
 	messages.unshift({
 		text: parsed.fixedScale ? '押し出しました。' : `変換しました（1単位 = ${formatNumber(scale)} mm）。`,
 		tone: 'ok'
@@ -203,7 +242,7 @@ function rebuild() {
 }
 
 function reset() {
-	viewer.clear();
+	viewer?.clear();
 	geometry = null;
 	ui.stats.hidden = true;
 	ui.placeholder.hidden = false;
@@ -270,6 +309,72 @@ function download() {
 	mesh.material.dispose();
 }
 
+let fontsReady = false;
+
+/** フォント一覧をプルダウンに反映する */
+function refreshFontSelect(selectKey) {
+	const previous = selectKey ?? ui.fontSelect.value;
+
+	ui.fontSelect.replaceChildren();
+
+	for (const entry of fontEntries()) {
+		const option = document.createElement('option');
+		option.value = entry.key;
+		option.textContent = entry.name;
+		ui.fontSelect.append(option);
+	}
+
+	if (previous && [...ui.fontSelect.options].some((o) => o.value === previous)) {
+		ui.fontSelect.value = previous;
+	}
+}
+
+let fontPromise = null;
+
+function setFontLoading(loading) {
+	const button = document.querySelector('[data-tool="text"]');
+
+	if (button) {
+		button.disabled = loading;
+		button.textContent = loading ? '文字（読込中）' : '文字';
+	}
+}
+
+/**
+ * 文字ツールで必要になったときに初めてフォントを用意する。
+ * 同梱フォントは 1.8MB あるので、最初の表示では読み込まない。
+ *
+ * 読み込みが終わるまで文字は置けない。待たずに置くと中身が空の図形が
+ * できてしまうため、ここで待ち合わせてから使う。
+ */
+function ensureFonts() {
+	if (fontsReady) return Promise.resolve(true);
+
+	fontPromise ??= (async () => {
+		setFontLoading(true);
+
+		try {
+			await restoreStoredFonts();
+			await ensureDefaultFont();
+			fontsReady = true;
+			refreshFontSelect(DEFAULT_FONT_KEY);
+
+			// 読み込み前に置かれてしまった文字があれば、ここで作り直す
+			editor?.refreshTextShapes();
+			return true;
+		} catch (error) {
+			console.error(error);
+			fontPromise = null;
+			showMessages([{ text: error.message, tone: 'error' }]);
+			return false;
+		} finally {
+			setFontLoading(false);
+		}
+	})();
+
+	return fontPromise;
+}
+
 let editorFitted = false;
 
 function setMode(next) {
@@ -286,7 +391,9 @@ function setMode(next) {
 		button.classList.toggle('is-active', button.dataset.mode === next);
 	}
 
-	if (next === 'draw') {
+	if (next === 'draw' && editor) {
+		ensureFonts();
+
 		// 非表示の間はキャンバスの寸法が取れないので、表示されてから描き直す
 		requestAnimationFrame(() => {
 			if (!editorFitted && editor.shapes.length > 0) {
@@ -311,12 +418,35 @@ ui.modeSwitch.addEventListener('click', (event) => {
 });
 
 ui.snap.addEventListener('change', () => {
+	if (!editor) return;
+
 	editor.snap = Number(ui.snap.value);
 	editor.render();
 });
 
-ui.fitView.addEventListener('click', () => editor.fitView());
-ui.clearShapes.addEventListener('click', () => editor.clearAll());
+ui.loadFont.addEventListener('click', () => ui.fontFile.click());
+
+ui.fontFile.addEventListener('change', async () => {
+	const file = ui.fontFile.files[0];
+	if (!file) return;
+
+	try {
+		const entry = await addFontFromFile(file);
+		refreshFontSelect(entry.key);
+		showMessages([{ text: `フォント「${entry.name}」を読み込みました。`, tone: 'ok' }]);
+	} catch (error) {
+		console.error(error);
+		showMessages([
+			{ text: `フォントを読み込めませんでした: ${error.message}`, tone: 'error' },
+			{ text: 'WOFF2 形式には対応していません。.ttf / .otf / .woff をお試しください。', tone: 'warn' }
+		]);
+	}
+
+	ui.fontFile.value = '';
+});
+
+ui.fitView.addEventListener('click', () => editor?.fitView());
+ui.clearShapes.addEventListener('click', () => editor?.clearAll());
 
 ui.drop.addEventListener('click', () => ui.file.click());
 ui.drop.addEventListener('keydown', (event) => {
@@ -371,5 +501,12 @@ ui.scaleMode.addEventListener('change', () => {
 	rebuild();
 });
 
-ui.edges.addEventListener('change', () => viewer.setEdgesVisible(ui.edges.checked));
+ui.edges.addEventListener('change', () => viewer?.setEdgesVisible(ui.edges.checked));
 ui.download.addEventListener('click', download);
+
+if (startupErrors.length > 0) {
+	showMessages(startupErrors.map((text) => ({ text, tone: 'error' })));
+}
+
+// 起動できたことを index.html 側の見張りに伝える（これが立たないと警告が出る）
+window.__curveExtrusionReady = true;
