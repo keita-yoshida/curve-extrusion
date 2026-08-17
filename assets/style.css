@@ -454,6 +454,19 @@ input[type="range"] {
 	line-height: 1.4;
 }
 
+.presets {
+	display: flex;
+	flex-wrap: wrap;
+	align-items: center;
+	gap: 5px;
+	margin-bottom: 4px;
+}
+
+.presets-label {
+	font-size: 11px;
+	color: var(--muted);
+}
+
 .prop-wide {
 	grid-column: 1 / -1;
 }

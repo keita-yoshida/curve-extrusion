@@ -10,10 +10,11 @@ import {
 	shapeFields,
 	shapeFromDrag,
 	shapeToContours,
+	getDefaultHeight,
 	scaleShape,
 	translateShape
 } from './editor-shapes.js';
-import { shapesToRegions } from './boolean.js';
+import { shapesToBands, shapeTop } from './solid.js';
 import { DEFAULT_FONT_KEY, buildTextContours, getFont } from './fonts.js';
 
 const NS = 'http://www.w3.org/2000/svg';
@@ -138,7 +139,13 @@ export class Editor {
 				// 復元した図形と新規作成の id が衝突しないよう、続きの番号から振り直す
 				let max = 0;
 				for (const shape of this.shapes) max = Math.max(max, shape.id ?? 0);
-				for (const shape of this.shapes) if (!shape.id) shape.id = ++max;
+
+				for (const shape of this.shapes) {
+					if (!shape.id) shape.id = ++max;
+					// Z 範囲を持たない古い保存データを補う
+					shape.z ??= 0;
+					shape.height ??= getDefaultHeight();
+				}
 			}
 		} catch {
 			this.shapes = [];
@@ -154,8 +161,40 @@ export class Editor {
 		this.changed();
 	}
 
-	toRegions(curveSegments) {
-		return shapesToRegions(this.shapes, curveSegments);
+	toBands(curveSegments) {
+		return shapesToBands(this.shapes, curveSegments);
+	}
+
+	/**
+	 * 選んだ図形の Z 範囲を、その下にある図形に合わせて設定する。
+	 * 数値を意識せずに浮き出し・彫り込み・貫通を切り替えられるようにするため。
+	 */
+	applyZPreset(id, preset) {
+		const index = this.indexOf(id);
+		const shape = this.byId(id);
+		if (!shape || index < 0) return;
+
+		const below = this.shapes.slice(0, index).filter((s) => !s.hidden);
+		const top = below.length > 0 ? Math.max(...below.map(shapeTop)) : 0;
+		const bottom = below.length > 0 ? Math.min(...below.map((s) => s.z)) : 0;
+
+		this.pushUndo();
+
+		if (preset === 'raise') {
+			shape.z = top;
+			shape.op = 'union';
+		} else if (preset === 'engrave') {
+			const depth = Math.max(0.2, Math.min(shape.height, 1));
+			shape.z = top - depth;
+			shape.height = depth;
+			shape.op = 'subtract';
+		} else {
+			shape.z = bottom;
+			shape.height = Math.max(top - bottom, 0.2);
+			shape.op = 'subtract';
+		}
+
+		this.changed();
 	}
 
 	// --- 文字 ---
@@ -359,22 +398,27 @@ export class Editor {
 	renderResult() {
 		this.resultLayer.replaceChildren();
 
-		const regions = this.toRegions(PREVIEW_SEGMENTS);
-		if (regions.length === 0) return;
+		const bands = this.toBands(PREVIEW_SEGMENTS);
+		if (bands.length === 0) return;
 
 		const ring = (points) => `M${points.map((p) => `${p.x.toFixed(3)},${p.y.toFixed(3)}`).join('L')}Z`;
-		const d = regions.map((region) => ring(region.contour) + region.holes.map(ring).join('')).join('');
 
-		this.resultLayer.append(
-			svgEl('path', { d, fill: '#6aa9ff', 'fill-opacity': 0.22, 'fill-rule': 'evenodd' }),
-			svgEl('path', {
-				d,
-				fill: 'none',
-				stroke: '#6aa9ff',
-				'stroke-width': 1.6 / this.view.scale,
-				'fill-rule': 'evenodd'
-			})
-		);
+		// 帯を重ねて塗ることで、段が積み上がっている様子が見える
+		for (const band of bands) {
+			const d = band.regions.map((region) => ring(region.contour) + region.holes.map(ring).join('')).join('');
+
+			this.resultLayer.append(
+				svgEl('path', { d, fill: '#6aa9ff', 'fill-opacity': 0.16, 'fill-rule': 'evenodd' }),
+				svgEl('path', {
+					d,
+					fill: 'none',
+					stroke: '#6aa9ff',
+					'stroke-width': 1.4 / this.view.scale,
+					'stroke-opacity': 0.8,
+					'fill-rule': 'evenodd'
+				})
+			);
+		}
 	}
 
 	renderOutlines() {
@@ -702,6 +746,8 @@ export class Editor {
 			panel.append(this.buildFontRow(shape));
 		}
 
+		panel.append(this.buildZPresets(shapeId));
+
 		const grid = el('div', 'prop-grid');
 
 		for (const field of shapeFields(shape)) {
@@ -776,6 +822,26 @@ export class Editor {
 		}
 
 		panel.append(grid);
+	}
+
+	/** Z 範囲のかんたん設定（下の図形の高さを見て自動で合わせる） */
+	buildZPresets(id) {
+		const row = el('div', 'presets');
+		row.append(el('span', 'presets-label', '配置'));
+
+		for (const [preset, label, title] of [
+			['raise', '浮き出し', '下の図形の上に乗せる'],
+			['engrave', '彫り込み', '下の図形の表面を彫る（底が残るので抜け落ちない）'],
+			['through', '貫通', '下の図形を貫いて切り抜く']
+		]) {
+			const button = el('button', 'mini', label);
+			button.type = 'button';
+			button.title = title;
+			button.addEventListener('click', () => this.applyZPreset(id, preset));
+			row.append(button);
+		}
+
+		return row;
 	}
 
 	/** 文字図形のフォント選択行 */

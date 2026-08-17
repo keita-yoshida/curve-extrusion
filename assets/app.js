@@ -1,6 +1,8 @@
 import * as THREE from '../vendor/three/three.module.min.js';
 import { STLExporter } from '../vendor/three/STLExporter.js';
-import { extrudeRegions, regionsBoundingBox, transformRegions } from './regions.js';
+import { regionsBoundingBox, transformRegions } from './regions.js';
+import { extrudeBands, extrudeRegions } from './solid.js';
+import { setDefaultHeight } from './editor-shapes.js';
 import { svgToRegions } from './svg-source.js';
 import { dxfToRegions } from './dxf-source.js';
 import { Editor } from './editor.js';
@@ -26,6 +28,7 @@ const ui = {
 	file: el('file'),
 	filename: el('filename'),
 	thickness: el('thickness'),
+	thicknessLabel: el('thickness-label'),
 	scaleMode: el('scale-mode'),
 	scaleValue: el('scale-value'),
 	scaleNote: el('scale-note'),
@@ -128,7 +131,7 @@ function currentParsed() {
 
 		// エディターの座標はそのまま mm。Y軸は画面と同じ下向きなので反転する
 		return {
-			regions: editor.toRegions(Number(ui.segments.value)),
+			bands: editor.toBands(Number(ui.segments.value)),
 			warnings: [],
 			flipY: true,
 			fixedScale: true
@@ -175,7 +178,9 @@ function rebuild() {
 
 	for (const warning of parsed.warnings ?? []) messages.push({ text: warning, tone: 'warn' });
 
-	if (parsed.regions.length === 0) {
+	const empty = parsed.bands ? parsed.bands.length === 0 : parsed.regions.length === 0;
+
+	if (empty) {
 		if (mode === 'draw') {
 			showMessages(editor?.shapes.length ? [{ text: '演算の結果、形が残りませんでした。', tone: 'warn' }] : []);
 		} else {
@@ -191,10 +196,31 @@ function rebuild() {
 	}
 
 	const scale = resolveScale(parsed);
-	const scaled = transformRegions(parsed.regions, { scale, flipY: parsed.flipY });
-	const thickness = Math.max(0.001, Number(ui.thickness.value) || 1);
+	const centerOrigin = ui.center.checked;
+	let regionCount = 0;
+	let holes = 0;
 
-	geometry = extrudeRegions(scaled, { thickness, centerOrigin: ui.center.checked });
+	if (parsed.bands) {
+		// 帯ごとに Y を反転してから、積み上げて1つのソリッドにする
+		const bands = parsed.bands.map((band) => ({
+			...band,
+			regions: transformRegions(band.regions, { scale, flipY: parsed.flipY })
+		}));
+
+		geometry = extrudeBands(bands, { centerOrigin });
+
+		for (const band of parsed.bands) {
+			regionCount += band.regions.length;
+			holes += band.regions.reduce((sum, region) => sum + region.holes.length, 0);
+		}
+	} else {
+		const scaled = transformRegions(parsed.regions, { scale, flipY: parsed.flipY });
+		const thickness = Math.max(0.001, Number(ui.thickness.value) || 1);
+
+		geometry = extrudeRegions(scaled, { thickness, centerOrigin });
+		regionCount = parsed.regions.length;
+		holes = parsed.regions.reduce((sum, region) => sum + region.holes.length, 0);
+	}
 
 	if (!geometry) {
 		messages.push({ text: 'メッシュを生成できませんでした。', tone: 'error' });
@@ -207,10 +233,10 @@ function rebuild() {
 	viewer?.setEdgesVisible(ui.edges.checked);
 
 	const size = geometry.boundingBox.getSize(new THREE.Vector3());
-	const holes = parsed.regions.reduce((sum, region) => sum + region.holes.length, 0);
+	const layers = parsed.bands ? `／${parsed.bands.length} 層` : '';
 
 	ui.statSize.textContent = `${formatNumber(size.x)} × ${formatNumber(size.y)} × ${formatNumber(size.z)} mm`;
-	ui.statRegions.textContent = `${parsed.regions.length} 個${holes > 0 ? `（穴 ${holes} 個）` : ''}`;
+	ui.statRegions.textContent = `${regionCount} 個${holes > 0 ? `（穴 ${holes} 個）` : ''}${layers}`;
 	ui.statVertices.textContent = geometry.attributes.position.count.toLocaleString('ja-JP');
 	ui.statFaces.textContent = (geometry.attributes.position.count / 3).toLocaleString('ja-JP');
 
@@ -384,6 +410,7 @@ function setMode(next) {
 	ui.drawControls.hidden = next !== 'draw';
 	ui.editorPane.hidden = next !== 'draw';
 	ui.scaleField.hidden = next === 'draw';
+	ui.thicknessLabel.textContent = next === 'draw' ? '新しい図形の厚み' : '押し出し厚み';
 	ui.holeModeField.hidden = next === 'draw' || source?.kind !== 'svg';
 	ui.workspace.classList.toggle('split', next === 'draw');
 
@@ -481,7 +508,11 @@ document.addEventListener('drop', (event) => {
 	loadFile(event.dataTransfer?.files?.[0]);
 });
 
-ui.thickness.addEventListener('input', rebuildSoon);
+ui.thickness.addEventListener('input', () => {
+	// 描画モードでは、この値は「これから作る図形」の既定の厚みになる
+	setDefaultHeight(Number(ui.thickness.value));
+	rebuildSoon();
+});
 ui.center.addEventListener('change', rebuild);
 ui.scaleValue.addEventListener('input', rebuildSoon);
 ui.holeMode.addEventListener('change', reparse);
@@ -507,6 +538,8 @@ ui.download.addEventListener('click', download);
 if (startupErrors.length > 0) {
 	showMessages(startupErrors.map((text) => ({ text, tone: 'error' })));
 }
+
+setDefaultHeight(Number(ui.thickness.value));
 
 // 起動できたことを index.html 側の見張りに伝える（これが立たないと警告が出る）
 window.__curveExtrusionReady = true;

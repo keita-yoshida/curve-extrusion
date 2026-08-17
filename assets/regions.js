@@ -134,37 +134,3 @@ export function transformRegions(regions, { scale = 1, flipY = false, offsetX = 
 		holes: region.holes.map(map)
 	}));
 }
-
-function regionsToShapes(regions) {
-	return regions.map((region) => {
-		const shape = new THREE.Shape(region.contour);
-		shape.holes = region.holes.map((hole) => new THREE.Path(hole));
-		return shape;
-	});
-}
-
-/**
- * リージョンを厚み thickness で押し出して1つのジオメトリにまとめる。
- * ExtrudeGeometry は Shape の配列をそのまま結合してくれる。
- */
-export function extrudeRegions(regions, { thickness, centerOrigin = true } = {}) {
-	const shapes = regionsToShapes(regions);
-	if (shapes.length === 0) return null;
-
-	const geometry = new THREE.ExtrudeGeometry(shapes, {
-		depth: thickness,
-		bevelEnabled: false,
-		steps: 1
-	});
-
-	if (centerOrigin) {
-		geometry.computeBoundingBox();
-		const box = geometry.boundingBox;
-		geometry.translate(-(box.min.x + box.max.x) / 2, -(box.min.y + box.max.y) / 2, 0);
-	}
-
-	geometry.computeVertexNormals();
-	geometry.computeBoundingBox();
-
-	return geometry;
-}

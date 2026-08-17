@@ -11,6 +11,17 @@ const KAPPA = 0.5522847498307936;
 
 let nextId = 1;
 
+// 新しい図形に与える既定の厚み（サイドバーの入力に追従する）
+let defaultHeight = 5;
+
+export function setDefaultHeight(mm) {
+	if (Number.isFinite(mm) && mm > 0) defaultHeight = mm;
+}
+
+export function getDefaultHeight() {
+	return defaultHeight;
+}
+
 export const SHAPE_LABELS = {
 	rect: '矩形',
 	ellipse: '楕円',
@@ -28,7 +39,8 @@ export const OP_LABELS = {
 };
 
 export function createShape(kind, params) {
-	return { id: nextId++, kind, op: 'union', rotation: 0, ...params };
+	// z = 下端の高さ、height = 厚み。この2つで図形ごとの Z 範囲が決まる
+	return { id: nextId++, kind, op: 'union', rotation: 0, z: 0, height: defaultHeight, ...params };
 }
 
 /** ドラッグで作った矩形範囲から図形を作る */
@@ -447,7 +459,11 @@ export function scaleShape(shape, factor, [ax, ay]) {
 
 /** プロパティパネルに出す数値項目の定義 */
 export function shapeFields(shape) {
-	const common = [{ key: 'rotation', label: '回転', unit: '°', step: 1, angle: true }];
+	const common = [
+		{ key: 'z', label: '下端Z', unit: 'mm', step: 0.5 },
+		{ key: 'height', label: '厚み', unit: 'mm', step: 0.5, min: 0.01 },
+		{ key: 'rotation', label: '回転', unit: '°', step: 1, angle: true }
+	];
 
 	switch (shape.kind) {
 		case 'rect':

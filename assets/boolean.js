@@ -94,3 +94,20 @@ export function multiPolygonToRegions(multiPolygon) {
 export function shapesToRegions(shapes, curveSegments) {
 	return multiPolygonToRegions(shapesToMultiPolygon(shapes, curveSegments));
 }
+
+export function regionsToMultiPolygon(regions) {
+	return regions.map((region) => [closeRing(region.contour), ...region.holes.map(closeRing)]);
+}
+
+/**
+ * リージョンどうしの差集合。
+ * Z の帯を積むとき、隣の帯と接している面には蓋をしない（＝差分にだけ蓋をする）ために使う。
+ */
+export function differenceRegions(regions, subtract) {
+	if (regions.length === 0) return [];
+	if (!subtract || subtract.length === 0) return regions;
+
+	return multiPolygonToRegions(
+		self.polygonClipping.difference(regionsToMultiPolygon(regions), regionsToMultiPolygon(subtract))
+	);
+}
