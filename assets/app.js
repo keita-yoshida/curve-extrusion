@@ -80,6 +80,7 @@ try {
 			properties: el('properties'),
 			fontSelect: ui.fontSelect,
 			fontEntries,
+			ensureFonts: () => ensureFonts(),
 			onFontMissing: () => showMessages([{ text: 'フォントを読み込めていません。', tone: 'error' }])
 		},
 		{ onChange: () => rebuildSoon() }
@@ -328,24 +329,50 @@ function refreshFontSelect(selectKey) {
 	}
 }
 
+let fontPromise = null;
+
+function setFontLoading(loading) {
+	const button = document.querySelector('[data-tool="text"]');
+
+	if (button) {
+		button.disabled = loading;
+		button.textContent = loading ? '文字（読込中）' : '文字';
+	}
+}
+
 /**
  * 文字ツールで必要になったときに初めてフォントを用意する。
  * 同梱フォントは 1.8MB あるので、最初の表示では読み込まない。
+ *
+ * 読み込みが終わるまで文字は置けない。待たずに置くと中身が空の図形が
+ * できてしまうため、ここで待ち合わせてから使う。
  */
-async function ensureFonts() {
-	if (fontsReady) return true;
+function ensureFonts() {
+	if (fontsReady) return Promise.resolve(true);
 
-	try {
-		await restoreStoredFonts();
-		await ensureDefaultFont();
-		fontsReady = true;
-		refreshFontSelect(DEFAULT_FONT_KEY);
-		return true;
-	} catch (error) {
-		console.error(error);
-		showMessages([{ text: error.message, tone: 'error' }]);
-		return false;
-	}
+	fontPromise ??= (async () => {
+		setFontLoading(true);
+
+		try {
+			await restoreStoredFonts();
+			await ensureDefaultFont();
+			fontsReady = true;
+			refreshFontSelect(DEFAULT_FONT_KEY);
+
+			// 読み込み前に置かれてしまった文字があれば、ここで作り直す
+			editor?.refreshTextShapes();
+			return true;
+		} catch (error) {
+			console.error(error);
+			fontPromise = null;
+			showMessages([{ text: error.message, tone: 'error' }]);
+			return false;
+		} finally {
+			setFontLoading(false);
+		}
+	})();
+
+	return fontPromise;
 }
 
 let editorFitted = false;

@@ -187,6 +187,14 @@ export class Editor {
 		return true;
 	}
 
+	/** 文字ツールのクリック。フォントが来るまで待ってから置く */
+	async placeText(point) {
+		const ready = await (this.refs.ensureFonts?.() ?? Promise.resolve(Boolean(getFont(DEFAULT_FONT_KEY))));
+		if (!ready) return;
+
+		this.addText(point, this.refs.fontSelect?.value || DEFAULT_FONT_KEY);
+	}
+
 	addText(point, fontKey) {
 		const shape = createShape('text', {
 			text: '文字',
@@ -199,7 +207,9 @@ export class Editor {
 			fontKey
 		});
 
-		this.rebakeText(shape);
+		// 輪郭を作れないまま置くと、見えない空の図形が残ってしまう
+		if (!this.rebakeText(shape)) return;
+
 		this.pushUndo();
 		this.shapes.push(shape);
 		this.selectedId = shape.id;
@@ -208,6 +218,19 @@ export class Editor {
 
 		// すぐ打ち替えられるように文字列の入力欄へフォーカスする
 		this.refs.properties.querySelector('textarea')?.focus();
+	}
+
+	/** フォントが後から読めたときに、輪郭が空のままの文字を作り直す */
+	refreshTextShapes() {
+		let updated = false;
+
+		for (const shape of this.shapes) {
+			if (shape.kind !== 'text' || shape.contours?.length) continue;
+			if (this.rebakeText(shape)) updated = true;
+		}
+
+		if (updated) this.changed();
+		else this.render();
 	}
 
 	/** フォントを差し替えて、その文字図形を作り直す */
@@ -853,6 +876,9 @@ export class Editor {
 	setTool(tool) {
 		if (this.pen) this.finishPen(false);
 
+		// 置く前から取りに行っておくと、クリック時の待ちが短くなる
+		if (tool === 'text') this.refs.ensureFonts?.();
+
 		this.tool = tool;
 		this.render();
 	}
@@ -938,7 +964,7 @@ export class Editor {
 
 		if (this.tool === 'text') {
 			this.drag = null;
-			this.addText(point, this.refs.fontSelect?.value || DEFAULT_FONT_KEY);
+			this.placeText(point);
 			return;
 		}
 
